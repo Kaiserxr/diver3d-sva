@@ -36,8 +36,8 @@ for training in (True, False):
         n_boxes += len(gt)
         if shown < 3 and len(gt):
             shown += 1
-            print(f"  {s['frame_id']}: points {s['points'].shape}, voxels {s['voxels'].shape}, "
-                  f'gt_boxes {gt.shape}')
+            vox = s['voxels'].shape if 'voxels' in s else 'built on GPU by the VFE'
+            print(f"  {s['frame_id']}: points {s['points'].shape}, voxels {vox}, gt_boxes {gt.shape}")
             print(f'    first box (x y z dx dy dz yaw class): {np.round(gt[0], 2).tolist()}')
     print(f'  sampled ~20 frames: {n_boxes} boxes total')
 

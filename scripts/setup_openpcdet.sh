@@ -8,8 +8,10 @@
 #      so every machine runs the same library code.
 #   2. Links our files (overlay/) into it. They are *links*, not copies, so an edit
 #      on either side is the same file and git sees it in this repo.
-#   3. Registers Diver3DDataset in OpenPCDet's dataset list, and makes the unused
+#   3. Registers Diver3DDataset (dataset) and SonarSparseMiddle (3D backbone) in
+#      OpenPCDet's lists, and makes the unused
 #      Argoverse 2 loader optional (it would otherwise require av2 + kornia).
+#      Also lets tools/train.py read its random seed from $PCDET_SEED (default 666).
 #   4. Replaces np.int / np.float (removed in numpy >= 1.24) with int / float.
 #   5. Links the Diver3D data folder to third_party/OpenPCDet/data/diver3d.
 #      The data itself is never copied or modified.
@@ -50,6 +52,7 @@ link() {   # link <path relative to overlay/ and to OpenPCDet/>
     ln -sfn "$src" "$dst"
 }
 link pcdet/datasets/diver3d
+link pcdet/models/backbones_3d/sonar_sparse_middle.py
 link tools/cfgs/dataset_configs/diver3d_dataset.yaml
 link tools/cfgs/diver3d_models
 echo "[2/5] overlay linked"
@@ -77,7 +80,41 @@ if argo in s and 'Argo2Dataset = None' not in s:
                   "    Argo2Dataset = None\n", 1)
 open(p, 'w', encoding='utf-8').write(s)
 EOF
-echo "[3/5] Diver3DDataset registered (Argoverse 2 import made optional)"
+
+# ... and register our sparse-conv middle stage among the 3D backbones
+python3 - "$PCDET/pcdet/models/backbones_3d/__init__.py" <<'EOF'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+if 'SonarSparseMiddle' not in s:
+    s = s.replace("from .dsvt import DSVT\n",
+                  "from .dsvt import DSVT\n"
+                  "from .sonar_sparse_middle import SonarSparseMiddle\n", 1)
+    s = s.replace("    'DSVT': DSVT,\n",
+                  "    'DSVT': DSVT,\n"
+                  "    'SonarSparseMiddle': SonarSparseMiddle,\n", 1)
+    if s.count('SonarSparseMiddle') != 3:
+        sys.exit('could not register SonarSparseMiddle: OpenPCDet backbones_3d/__init__.py changed shape')
+    open(p, 'w', encoding='utf-8').write(s)
+EOF
+echo "[3/5] Diver3DDataset and SonarSparseMiddle registered (Argoverse 2 import made optional)"
+
+# 3b. let train.py take the seed from $PCDET_SEED (default 666, OpenPCDet's fixed value),
+#     so the same experiment can be repeated with a second seed
+python3 - "$PCDET/tools/train.py" <<'EOF'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+if 'PCDET_SEED' not in s:
+    old1 = "common_utils.set_random_seed(666 + cfg.LOCAL_RANK)"
+    old2 = "seed=666 if args.fix_random_seed else None"
+    if s.count(old1) != 1 or s.count(old2) != 1:
+        sys.exit('could not patch the seed: OpenPCDet tools/train.py changed shape')
+    s = s.replace(old1, "common_utils.set_random_seed(int(os.environ.get('PCDET_SEED', 666)) + cfg.LOCAL_RANK)")
+    s = s.replace(old2, "seed=int(os.environ.get('PCDET_SEED', 666)) if args.fix_random_seed else None")
+    open(p, 'w', encoding='utf-8').write(s)
+EOF
+echo "[3b]  train.py seed now read from \$PCDET_SEED (default 666)"
 
 # 4. numpy >= 1.24 compatibility (np.int32 / np.float32 are untouched)
 grep -rlE 'np\.(int|float)\b' "$PCDET/pcdet" --include='*.py' \

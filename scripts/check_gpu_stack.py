@@ -65,6 +65,64 @@ def pcdet_ops():
     return f'iou3d_nms CUDA ops run, IoU[0,1]={iou[0, 1].item():.3f}, nms kept {len(keep)}'
 
 
+def torch_scatter_gpu():
+    import torch
+    import torch_scatter
+    src = torch.tensor([1., 5., 2., 7.], device='cuda', requires_grad=True)
+    idx = torch.tensor([0, 0, 1, 1], device='cuda')
+    out, _ = torch_scatter.scatter_max(src, idx)
+    out.sum().backward()
+    assert out.tolist() == [5., 7.], out.tolist()
+    return f'torch_scatter {torch_scatter.__version__}, scatter_max on GPU ok'
+
+
+def middle_stages():
+    """Build Run A and Run B middle stages from the real configs and check they give the same BEV shape."""
+    import os
+    from pathlib import Path
+    import numpy as np
+    import torch
+    from pcdet.config import cfg_from_yaml_file
+    from easydict import EasyDict
+    from pcdet.models.backbones_3d import __all__ as backbones_3d
+    from pcdet.models.backbones_2d.map_to_bev import __all__ as map_to_bev
+
+    tools = Path(__file__).resolve().parents[1] / 'third_party' / 'OpenPCDet' / 'tools'
+    old = os.getcwd()
+    os.chdir(tools)
+    try:
+        cfgs = {n: cfg_from_yaml_file(f'cfgs/diver3d_models/{n}.yaml', EasyDict())
+                for n in ('centerpoint_sparseconv', 'dsvt_voxel')}
+    finally:
+        os.chdir(old)
+
+    grid = np.array([120, 100, 10])                    # x, y, z
+    torch.manual_seed(0)
+    coords = []
+    for b in range(2):                                  # 2 frames, ~1700 voxels each (typical Diver3D)
+        xyz = torch.stack([torch.randint(0, n, (2500,)) for n in (10, 100, 120)], 1)   # z, y, x
+        xyz = torch.unique(xyz, dim=0)[:1700]
+        coords.append(torch.cat([torch.full((len(xyz), 1), b), xyz], 1))
+    coords = torch.cat(coords).int().cuda()
+
+    shapes, info = {}, []
+    for name, c in cfgs.items():
+        m3d = backbones_3d[c.MODEL.BACKBONE_3D.NAME](
+            model_cfg=c.MODEL.BACKBONE_3D, input_channels=c.MODEL.VFE.NUM_FILTERS[-1], grid_size=grid,
+            voxel_size=[0.1, 0.1, 0.5], point_cloud_range=[0, -5, -2.5, 12, 5, 2.5]).cuda()
+        bev = map_to_bev[c.MODEL.MAP_TO_BEV.NAME](model_cfg=c.MODEL.MAP_TO_BEV, grid_size=grid).cuda()
+        feats = torch.randn(len(coords), c.MODEL.VFE.NUM_FILTERS[-1], device='cuda', requires_grad=True)
+        d = bev(m3d({'voxel_features': feats, 'voxel_coords': coords, 'batch_size': 2}))
+        out = d['spatial_features']
+        out.mean().backward()
+        n_params = sum(p.numel() for p in m3d.parameters())
+        shapes[name] = tuple(out.shape)
+        info.append(f'{c.MODEL.BACKBONE_3D.NAME} {n_params / 1e6:.2f}M params -> {tuple(out.shape)}')
+    assert len(set(shapes.values())) == 1, f'BEV shapes differ: {shapes}'
+    assert shapes['dsvt_voxel'] == (2, 128, 100, 120), shapes
+    return 'same BEV shape; ' + '; '.join(info)
+
+
 def module(name):
     def fn():
         m = importlib.import_module(name)
@@ -76,7 +134,9 @@ print(f'python {sys.version.split()[0]}')
 check('torch + CUDA on GPU', torch_cuda)
 check('spconv sparse conv on GPU', spconv_conv)
 check('OpenPCDet CUDA ops', pcdet_ops)
-for name in ('numpy', 'numba', 'scipy', 'tensorboardX', 'torch_scatter'):
+check('torch_scatter on GPU', torch_scatter_gpu)
+check('Run A / Run B middle stages', middle_stages)
+for name in ('numpy', 'numba', 'scipy', 'tensorboardX'):
     check(name, module(name))
 
 print('\n==== summary ====')

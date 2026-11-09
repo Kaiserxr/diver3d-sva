@@ -4,6 +4,9 @@
 #   bash scripts/train.sh <config name> <run tag> [extra train.py args]
 #   e.g. bash scripts/train.sh pointpillar baseline_s666 --num_epochs_to_eval 20
 #
+# Seed: 666 by default. For another seed, set SEED and put it in the tag:
+#   SEED=1234 bash scripts/train.sh pointpillar baseline_s1234 --num_epochs_to_eval 20
+#
 # Run it inside tmux (see LAB_RUNBOOK.md) so it survives a dropped AnyDesk session.
 #
 # Outputs:
@@ -32,6 +35,12 @@ if [[ -d "$OUT/ckpt" ]] && ls "$OUT/ckpt"/*.pth >/dev/null 2>&1; then
     echo "pick a new tag, or delete that folder if you really want to start over"; exit 1
 fi
 
+SEED="${SEED:-666}"
+export PCDET_SEED="$SEED"                       # read by train.py (patched by setup_openpcdet.sh)
+if ! grep -q PCDET_SEED "$TOOLS/train.py"; then
+    echo "train.py doesn't read PCDET_SEED yet: rerun bash scripts/setup_openpcdet.sh <data dir>"; exit 1
+fi
+
 mkdir -p "$REPO/logs"
 LOG="$REPO/logs/${CFG_NAME}__${TAG}__$(date +%Y%m%d-%H%M%S).log"
 CMD=(python train.py --cfg_file "$CFG" --extra_tag "$TAG" --fix_random_seed --workers 8 "$@")
@@ -42,6 +51,7 @@ CMD=(python train.py --cfg_file "$CFG" --extra_tag "$TAG" --fix_random_seed --wo
     echo "repo commit: $(git -C "$REPO" rev-parse HEAD) ($(git -C "$REPO" status --porcelain | wc -l) uncommitted changes)"
     echo "openpcdet:   $(git -C "$REPO/third_party/OpenPCDet" rev-parse --short HEAD)"
     echo "gpu:         $(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader)"
+    echo "seed:        $SEED"
     echo "command:     (cd $TOOLS && ${CMD[*]})"
     echo "output dir:  $OUT"
     echo
