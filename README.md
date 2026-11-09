@@ -11,7 +11,7 @@ backbone versus a sparse voxel attention backbone, starting with
 
 > **Status: work in progress.** In place: the Diver3D dataset loader for OpenPCDet,
 > scoring with the official Diver3D evaluator, a PointPillars baseline, a zero-shot
-> evaluation script, and the sparse-conv vs DSVT-V configs
+> evaluation script, and configs comparing a sparse-conv middle stage with DSVT-V, PTv3 and SST
 > ([plan](docs/DSVT_PLAN.md)). None of the new configs has been trained yet.
 
 ## What is in this repo
@@ -23,6 +23,9 @@ are fetched separately.
 overlay/                     files linked into OpenPCDet at the same paths
   pcdet/datasets/diver3d/    Diver3DDataset: loads frames, scores with the official evaluator
   pcdet/models/backbones_3d/sonar_sparse_middle.py   SonarSparseMiddle: sparse conv middle stage (Run A)
+  pcdet/models/backbones_3d/ptv3_backbone.py, ptv3/  PTv3 adapter + vendored Pointcept PTv3 (Run C, MIT)
+  pcdet/models/backbones_3d/sst_backbone.py          SST-style window attention (Run D)
+  pcdet/models/backbones_2d/map_to_bev/voxel_column_max.py   per-voxel features -> BEV (Runs C, D)
   tools/cfgs/dataset_configs/diver3d_dataset.yaml   crop, voxel size, splits
   tools/cfgs/diver3d_models/ one config per model
 zeroshot/                    run pretrained LiDAR checkpoints on Diver3D, with results
@@ -89,9 +92,11 @@ Configs in `overlay/tools/cfgs/diver3d_models/`:
 | `pointpillar` | PointPillars baseline (yaw-only anchors) |
 | `centerpoint_sparseconv` | Run A: sparse 3D conv middle stage (`SonarSparseMiddle`) + CenterHead |
 | `dsvt_voxel` | Run B: DSVT-V sparse voxel attention middle stage + the same CenterHead |
+| `ptv3_voxel` | Run C: Point Transformer V3 (official Pointcept code, vendored) + the same CenterHead |
+| `sst_voxel` | Run D: SST-style single-stride window attention (re-implementation) + the same CenterHead |
 | `*_overfit` | sanity checks: train and evaluate on the same 105 training frames |
 
-Runs A and B are identical except for the 3D middle stage; see [docs/DSVT_PLAN.md](docs/DSVT_PLAN.md).
+Runs A–D are identical except for the 3D middle stage; see [docs/DSVT_PLAN.md](docs/DSVT_PLAN.md).
 
 Evaluation writes predictions in the Diver3D submission format and scores them
 with the dataset's official `tools/diver3d_eval.py` (SDS, mAP3D, AP3D, AOE3D, …).
@@ -122,5 +127,9 @@ when they work.
 ## Acknowledgements
 
 - [OpenPCDet](https://github.com/open-mmlab/OpenPCDet) (Apache-2.0), which provides the detectors, including DSVT.
+- [Pointcept](https://github.com/Pointcept/Pointcept) (MIT): Point Transformer V3, vendored in
+  `overlay/pcdet/models/backbones_3d/ptv3/` with its licence.
+- SST ([Fan et al., CVPR 2022](https://arxiv.org/abs/2112.06375)): `sst_backbone.py` re-implements its
+  core mechanism; differences are listed at the top of that file.
 - Diver3D, derived from [uScenes](https://github.com/era-research-lab/uScenes).
   If you use the data, cite the dataset authors as described in its README.

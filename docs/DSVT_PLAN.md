@@ -1,7 +1,9 @@
 # Plan: sparse conv vs DSVT-V on Diver3D
 
-**Status: approved and implemented (configs `centerpoint_sparseconv.yaml`, `dsvt_voxel.yaml`).
-Not trained yet; run it with Part 4 of [LAB_RUNBOOK.md](../LAB_RUNBOOK.md).**
+**Status: approved and implemented for four middle stages: Run A sparse conv
+(`centerpoint_sparseconv.yaml`), Run B DSVT-V (`dsvt_voxel.yaml`), Run C PTv3 (`ptv3_voxel.yaml`),
+Run D SST-style (`sst_voxel.yaml`); see section 9 for C and D. Not trained yet; run with Part 4 of
+[LAB_RUNBOOK.md](../LAB_RUNBOOK.md).**
 
 ## 1. The question
 
@@ -46,7 +48,7 @@ Both middle stages squeeze the **height** dimension into channels and keep the f
 No existing files change behaviour: the PointPillars configs and the dataset loader
 stay as they are.
 
-## 3. Shared settings (identical in Run A and Run B)
+## 3. Shared settings (identical in every run)
 
 | Setting | Value | Why |
 |---|---|---|
@@ -153,3 +155,67 @@ channels, 100 × 120) as Run A's, so the BEV encoder and head need no change.
 2. Approve the DSVT settings in §5: **1.6 m / 3.2 m windows, set size 48, `d_model` 128**.
 3. Approve adding the new `SonarSparseMiddle` (§4) as the sparse-conv control, instead
    of OpenPCDet's `VoxelBackBone8x`, which can't handle our grid.
+
+## 9. Added later: Run C (PTv3) and Run D (SST-style)
+
+Requested after the A/B plan was approved. Same rule: only the middle stage changes. Every
+config is generated from Run A by replacing the block between the `middle stage` markers.
+
+### Why these two, from the reading list
+
+All the candidates group sparse voxels and run attention inside each group; they differ in
+**how they group**. With DSVT these two cover the three main ideas:
+
+| Run | Model | Grouping | Code used |
+|---|---|---|---|
+| B | DSVT-V | windows split into equal-size **sets**, rotated x/y sorting | official, already in OpenPCDet |
+| C | **PTv3** | voxels **serialized** along space-filling curves (z-order, Hilbert), cut into equal **patches**; U-Net encoder-decoder | **official** Pointcept code, vendored (MIT), unchanged model |
+| D | **SST** | **fixed windows**, padded region batching, shifted windows, **never downsamples** | **re-implementation** of the mechanism (official code is an mmdetection3d fork) |
+
+Not chosen:
+- **VoTr** and **MsSVT++** need custom CUDA kernels written for old library versions
+  (spconv 1.x era / custom hash-table ops). Porting them to the RTX 5080 (Blackwell) is a large,
+  uncertain job.
+- **FlatFormer** groups voxels much like PTv3 does (sort, cut equal-size groups), so it would
+  add little.
+
+### Run C: PTv3 settings
+
+| Setting | PTv3 default (indoor/outdoor) | **Diver3D** | Reasoning |
+|---|---|---|---|
+| Serialization orders | z, z-trans, hilbert, hilbert-trans | same | default |
+| Patch size | 48–1024 | **48** | = DSVT's set size; a diver is ~89 voxels |
+| Encoder | 5 stages, depths 2/2/2/6/2, 32→512 ch | **4 stages, depths 2/2/2/2, 64/64/128/128 ch** | far less data than ScanNet/nuScenes |
+| Decoder | 2/2/2/2, 64→256 ch | **1/1/1, output 128 ch per voxel** | output width = shared BEV width |
+| FFN ratio | 4 | **2** | as in Runs B and D |
+| Drop path | 0.3 | **0.1** | short 20-epoch schedule |
+| FlashAttention | on | **off** | avoids building flash-attn for Blackwell; PTv3's own plain-PyTorch path is used (same maths) |
+| To BEV | n/a | **`VoxelColumnMaxScatter`**: max over each vertical column | PTv3 returns features at every voxel |
+
+### Run D: SST-style settings
+
+| Setting | SST (Waymo) | **Diver3D** | Reasoning |
+|---|---|---|---|
+| Input | 2D pillars, 0.32 m | **3D voxels 0.1 × 0.1 × 0.5 m**, full-height windows | keeps elevation, same grid as all runs |
+| Window | 12 × 12 pillars (3.8 m) | **16 × 16 voxels (1.6 m)**, shift 8 | same window as DSVT's base window |
+| Layers / width / heads / FFN | 6 / 128 / 8 / 256 | **8 / 128 / 8 / 256** | 8 attention layers, as DSVT here |
+| Region batching | yes, with voxel dropping | **yes, no dropping** | only ~1,700 voxels per frame; dropping would lose diver voxels |
+| Position encoding | sine | learned MLP of in-window position | simpler; noted as a difference |
+| To BEV | pillar scatter | **`VoxelColumnMaxScatter`** | per-voxel features |
+
+### Verified on the laptop (CPU, real Diver3D frames)
+
+- SST's padded, grouped attention equals attention computed window by window (max difference ~1e-6),
+  for plain and shifted windows; gradients flow through all 8 layers. 1.20 M parameters.
+- `VoxelColumnMaxScatter` equals an explicit loop exactly.
+- PTv3 adapter: shuffling the input voxels shuffles the outputs identically (max difference ~3e-6),
+  so every voxel gets its own feature back; gradients flow.
+- These used a stand-in for spconv (none exists for Windows CPU). The real sparse convs are
+  tested by `check_gpu_stack.py` on the lab GPU, which also prints each run's parameter count.
+
+### Fairness caveats to report
+
+- C and D use **column max** to reach the BEV map, while A and B use their own height-collapse
+  (sparse conv, attention pooling). That is part of each architecture, and is stated with results.
+- Parameter counts differ (C is the largest). `check_gpu_stack.py` prints them; report them
+  next to the scores.

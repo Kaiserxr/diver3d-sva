@@ -220,8 +220,8 @@ python ~/projects/diver3d-sva/scripts/check_gpu_stack.py
 ```
 
 📋 Paste the setup script's `[1/5]`…`[5/5]` lines and the summary.
-`OpenPCDet CUDA ops` must say **PASS**, and `Run A / Run B middle stages` should too.
-(`torch_scatter` SKIP is expected; it's installed in Part 4.)
+`OpenPCDet CUDA ops` must say **PASS**. `torch_scatter` and `middle stages A/B/C/D`
+showing SKIP is expected here; their packages are installed in Part 4.
 
 Record the exact environment so runs can be reproduced:
 
@@ -349,18 +349,41 @@ either way means something is wrong.
 
 ---
 
-# Part 4: sparse conv vs DSVT-V (the main experiment)
+# Part 4: sparse conv vs attention backbones (the main experiment)
 
-The plan and every design choice are in [docs/DSVT_PLAN.md](docs/DSVT_PLAN.md). Two
+The plan and every design choice are in [docs/DSVT_PLAN.md](docs/DSVT_PLAN.md). Four
 models, identical except for the 3D middle stage:
 
-| Run | Config | Middle stage |
-|---|---|---|
-| A (control) | `centerpoint_sparseconv` | `SonarSparseMiddle`: sparse 3D conv, height 10 → 5 → 2 |
-| B | `dsvt_voxel` | DSVT-V: sparse voxel attention, height 10 → 5 → 3 → 1 |
+| Run | Config | Middle stage | Code |
+|---|---|---|---|
+| A (control) | `centerpoint_sparseconv` | sparse 3D conv, height 10 → 5 → 2 | ours (`SonarSparseMiddle`) |
+| B | `dsvt_voxel` | DSVT-V: attention in equal-size sets inside windows | official (OpenPCDet) |
+| C | `ptv3_voxel` | PTv3: attention in patches along space-filling curves, U-Net | official (Pointcept, vendored) |
+| D | `sst_voxel` | SST-style: fixed shifted windows, single stride | our re-implementation |
 
 Do Part 1 first (at least through Step 9). If you set up before this part existed,
 start at 4.1; otherwise skip to 4.2.
+
+## How long it takes
+
+These runs **train from scratch** on Diver3D, as in the paper's protocol. No public
+pretrained weights fit our voxel grid and single class, and training every model the
+same way keeps the comparison fair.
+
+There are no measured times on the RTX 5080 yet. These are estimates from Colab
+(PointPillars: about 15 min per epoch on a T4) and the RTX 5080 being several times
+faster. The first epoch of the first run gives the real number; paste it and I'll update
+this table.
+
+| Run | Per epoch (estimate) | 20 epochs + per-epoch scoring |
+|---|---|---|
+| PointPillars | 3–5 min | about 1–2 h |
+| A sparse conv | 4–8 min | about 1.5–3 h |
+| B DSVT-V, C PTv3, D SST | 6–12 min each | about 2.5–4.5 h each |
+| Sanity check (each) | n/a | 10–20 min |
+
+All four runs × 2 seeds is roughly **20–30 GPU hours**, about three overnight sessions.
+The GPU can only run one at a time.
 
 ## 4.1 Get the new code
 
@@ -370,23 +393,27 @@ cd ~/projects/diver3d-sva && git pull
 bash scripts/setup_openpcdet.sh ~/data/diver3d_v2
 ```
 
-The setup script should print `[3/5] Diver3DDataset and SonarSparseMiddle registered`
-and `[3b] train.py seed now read from $PCDET_SEED`. No rebuild is needed: the new
-middle stage is plain Python.
+The setup script should print `[3/5] registered: Diver3DDataset, SonarSparseMiddle,
+PTv3Backbone, SSTBackbone, VoxelColumnMaxScatter` and `[3b] train.py seed now read from
+$PCDET_SEED`. No rebuild is needed: the new model code is plain Python.
 
-## 4.2 Install torch_scatter (needed by the voxel encoder of both runs)
+## 4.2 Install torch_scatter and addict
+
+`torch_scatter` is used by the voxel encoder of every run and by PTv3. `addict` is a
+tiny package PTv3 uses.
 
 ```bash
 conda activate sva
+pip install addict
 pip install torch_scatter -f https://data.pyg.org/whl/torch-2.7.0+cu128.html
 python ~/projects/diver3d-sva/scripts/check_gpu_stack.py
 ```
 
-📋 Paste the summary. The two new lines must say **PASS**:
+📋 Paste the summary. These lines must say **PASS**:
 - `torch_scatter on GPU`
-- `Run A / Run B middle stages`: this builds both middle stages from the real
-  configs, runs a forward and backward pass, and checks they produce the **same BEV
-  shape** `(2, 128, 100, 120)`. It also prints each one's parameter count.
+- `middle stages A/B/C/D`: builds all four middle stages from the real configs,
+  runs a forward and backward pass on the GPU, and checks they all produce the
+  **same BEV shape** `(2, 128, 100, 120)`. It prints each one's parameter count.
 
 > **If `torch_scatter on GPU` FAILS** (no Blackwell kernels in the wheel), build it from
 > source. It takes about 10 minutes, so use tmux:
@@ -405,12 +432,12 @@ the script shows that instead of a voxel array):
 python ~/projects/diver3d-sva/scripts/check_dataset.py dsvt_voxel
 ```
 
-## 4.3 Sanity checks: both runs must memorise 105 frames (about 30–40 min total)
+## 4.3 Sanity checks: every run must memorise 105 frames (about 1–1.5 h total)
 
-Same idea as Part 2. Both run one after the other in one tmux session:
+Same idea as Part 2. All four run one after the other in one tmux session:
 
 ```bash
-tmux new -s sanityAB
+tmux new -s sanity4
 ```
 
 Inside tmux:
@@ -418,30 +445,32 @@ Inside tmux:
 ```bash
 conda activate sva
 cd ~/projects/diver3d-sva
-bash scripts/train.sh centerpoint_sparseconv_overfit sanity --num_epochs_to_eval 5 ; \
-bash scripts/train.sh dsvt_voxel_overfit sanity --num_epochs_to_eval 5
+for c in centerpoint_sparseconv dsvt_voxel ptv3_voxel sst_voxel; do \
+  bash scripts/train.sh ${c}_overfit sanity --num_epochs_to_eval 5 ; done
 ```
 
-Detach (`Ctrl+b`, `d`). When both logs end with `finished ... exit code 0`:
+Detach (`Ctrl+b`, `d`). When all four logs end with `finished ... exit code 0`:
 
 ```bash
 cd ~/projects/diver3d-sva
-for c in centerpoint_sparseconv_overfit dsvt_voxel_overfit; do echo "=== $c"; \
-  grep "Loss:" logs/${c}__sanity__*.log | sed -n '1p;$p'; \
-  grep -E "EPOCH [0-9]+ EVALUATION|  (mAP3D|AP3D@0.35|APBEV@0.35) " logs/${c}__sanity__*.log | tail -8; done
+for c in centerpoint_sparseconv dsvt_voxel ptv3_voxel sst_voxel; do echo "=== $c"; \
+  grep "Loss:" logs/${c}_overfit__sanity__*.log | sed -n '1p;$p'; \
+  grep -E "EPOCH [0-9]+ EVALUATION|  (mAP3D|AP3D@0.35|APBEV@0.35) " logs/${c}_overfit__sanity__*.log | tail -8; done
 ```
 
-📋 Paste it. Both should show loss falling a lot and APBEV@0.35 high on these frames.
-If DSVT clearly fails while the sparse conv succeeds, **stop and tell me**: that's the
-learning-rate risk from the plan, and it's cheaper to fix now than after a 20-epoch run.
+📋 Paste it. Each should show loss falling a lot and APBEV@0.35 high on these frames.
+If an attention model clearly fails while the sparse conv succeeds, **stop and tell me**:
+that's the learning-rate risk from the plan, and it's cheaper to fix now than after a
+20-epoch run.
 
-## 4.4 The real runs: A then B, seed 666
+## 4.4 The real runs, seed 666 (one after the other)
 
-One GPU, so run them **one after the other**, never at the same time. Running them
-side by side would slow both and make the speed comparison meaningless.
+One GPU, so the runs go **one after the other**, never at the same time. Running them
+side by side would slow both and make the speed comparison meaningless. A and B first
+(the core comparison), then C and D. Start whichever pair fits the time you have:
 
 ```bash
-tmux new -s runAB
+tmux new -s runs
 ```
 
 Inside tmux:
@@ -450,7 +479,9 @@ Inside tmux:
 conda activate sva
 cd ~/projects/diver3d-sva
 bash scripts/train.sh centerpoint_sparseconv runA_s666 --num_epochs_to_eval 20 ; \
-bash scripts/train.sh dsvt_voxel runB_s666 --num_epochs_to_eval 20
+bash scripts/train.sh dsvt_voxel runB_s666 --num_epochs_to_eval 20 ; \
+bash scripts/train.sh ptv3_voxel runC_s666 --num_epochs_to_eval 20 ; \
+bash scripts/train.sh sst_voxel runD_s666 --num_epochs_to_eval 20
 ```
 
 📋 After about 15 minutes, paste `tail -n 20` of the Run A log so we can estimate the total time:
@@ -459,16 +490,18 @@ bash scripts/train.sh dsvt_voxel runB_s666 --num_epochs_to_eval 20
 tail -n 20 ~/projects/diver3d-sva/logs/centerpoint_sparseconv__runA_s666__*.log
 ```
 
-When both have finished, list each run's per-epoch scores:
+When runs have finished, list their per-epoch scores (finished runs show results;
+unfinished ones show nothing yet):
 
 ```bash
 cd ~/projects/diver3d-sva
-for r in centerpoint_sparseconv__runA_s666 dsvt_voxel__runB_s666; do echo "=== $r"; \
-  grep -E "EPOCH [0-9]+ EVALUATION|  (SDS|mAP3D|AP3D@0.35|AP3D@0.50) " logs/${r}__*.log; done
+for r in centerpoint_sparseconv__runA dsvt_voxel__runB ptv3_voxel__runC sst_voxel__runD; do echo "=== $r"; \
+  grep -E "EPOCH [0-9]+ EVALUATION|  (SDS|mAP3D|AP3D@0.35|AP3D@0.50) " logs/${r}_s666__*.log; done
 ```
 
 📋 Paste it. For each run, pick the epoch with the best AP3D@0.35, ignoring epochs 1–4,
-and score it on the full val set as in Part 3. Replace `N` (and the config/tag for Run B):
+and score it on the full val set as in Part 3. Replace `N`, and the config name and tag
+for the other runs:
 
 ```bash
 cd ~/projects/diver3d-sva/third_party/OpenPCDet/tools
@@ -478,18 +511,20 @@ python test.py --cfg_file cfgs/diver3d_models/centerpoint_sparseconv.yaml --extr
     2>&1 | tee ~/projects/diver3d-sva/logs/centerpoint_sparseconv__runA_s666__full_val_epN.log
 ```
 
-📋 Paste both score blocks.
+📋 Paste each score block.
 
 ## 4.5 Second seed
 
-Same two runs with seed 1234. `SEED` sets it, and the tag records it:
+The same runs with seed 1234. `SEED` sets it, and the tag records it:
 
 ```bash
-tmux new -s runAB2
+tmux new -s runs2
 conda activate sva
 cd ~/projects/diver3d-sva
 SEED=1234 bash scripts/train.sh centerpoint_sparseconv runA_s1234 --num_epochs_to_eval 20 ; \
-SEED=1234 bash scripts/train.sh dsvt_voxel runB_s1234 --num_epochs_to_eval 20
+SEED=1234 bash scripts/train.sh dsvt_voxel runB_s1234 --num_epochs_to_eval 20 ; \
+SEED=1234 bash scripts/train.sh ptv3_voxel runC_s1234 --num_epochs_to_eval 20 ; \
+SEED=1234 bash scripts/train.sh sst_voxel runD_s1234 --num_epochs_to_eval 20
 ```
 
 Then pick and full-val score the best epochs as in 4.4. With two seeds per run, we

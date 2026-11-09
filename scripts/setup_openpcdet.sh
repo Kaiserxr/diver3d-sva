@@ -8,8 +8,9 @@
 #      so every machine runs the same library code.
 #   2. Links our files (overlay/) into it. They are *links*, not copies, so an edit
 #      on either side is the same file and git sees it in this repo.
-#   3. Registers Diver3DDataset (dataset) and SonarSparseMiddle (3D backbone) in
-#      OpenPCDet's lists, and makes the unused
+#   3. Registers our classes in OpenPCDet's lists: Diver3DDataset (dataset);
+#      SonarSparseMiddle, PTv3Backbone, SSTBackbone (3D middle stages);
+#      VoxelColumnMaxScatter (voxels -> BEV). Also makes the unused
 #      Argoverse 2 loader optional (it would otherwise require av2 + kornia).
 #      Also lets tools/train.py read its random seed from $PCDET_SEED (default 666).
 #   4. Replaces np.int / np.float (removed in numpy >= 1.24) with int / float.
@@ -53,6 +54,10 @@ link() {   # link <path relative to overlay/ and to OpenPCDet/>
 }
 link pcdet/datasets/diver3d
 link pcdet/models/backbones_3d/sonar_sparse_middle.py
+link pcdet/models/backbones_3d/ptv3_backbone.py
+link pcdet/models/backbones_3d/ptv3
+link pcdet/models/backbones_3d/sst_backbone.py
+link pcdet/models/backbones_2d/map_to_bev/voxel_column_max.py
 link tools/cfgs/dataset_configs/diver3d_dataset.yaml
 link tools/cfgs/diver3d_models
 echo "[2/5] overlay linked"
@@ -81,23 +86,28 @@ if argo in s and 'Argo2Dataset = None' not in s:
 open(p, 'w', encoding='utf-8').write(s)
 EOF
 
-# ... and register our sparse-conv middle stage among the 3D backbones
-python3 - "$PCDET/pcdet/models/backbones_3d/__init__.py" <<'EOF'
+# ... and register our model modules in OpenPCDet's lookup tables (an `__all__` dict per folder)
+register() {   # register <__init__.py relative to OpenPCDet/pcdet/models> <module>:<Class> ...
+    python3 - "$PCDET/pcdet/models/$1" "${@:2}" <<'EOF'
 import sys
-p = sys.argv[1]
+p, entries = sys.argv[1], [e.split(':') for e in sys.argv[2:]]
 s = open(p, encoding='utf-8').read()
-if 'SonarSparseMiddle' not in s:
-    s = s.replace("from .dsvt import DSVT\n",
-                  "from .dsvt import DSVT\n"
-                  "from .sonar_sparse_middle import SonarSparseMiddle\n", 1)
-    s = s.replace("    'DSVT': DSVT,\n",
-                  "    'DSVT': DSVT,\n"
-                  "    'SonarSparseMiddle': SonarSparseMiddle,\n", 1)
-    if s.count('SonarSparseMiddle') != 3:
-        sys.exit('could not register SonarSparseMiddle: OpenPCDet backbones_3d/__init__.py changed shape')
-    open(p, 'w', encoding='utf-8').write(s)
+for module, cls in entries:
+    if f"'{cls}': {cls}" in s:
+        continue                                   # already registered (rerun)
+    head = s.index('\n__all__ = {')
+    s = s[:head] + f'\nfrom .{module} import {cls}' + s[head:]
+    close = s.index('\n}', s.index('\n__all__ = {'))
+    s = s[:close] + f"\n    '{cls}': {cls}," + s[close:]
+    if s.count(f"'{cls}': {cls}") != 1:
+        sys.exit(f'could not register {cls} in {p}: the file changed shape')
+open(p, 'w', encoding='utf-8').write(s)
 EOF
-echo "[3/5] Diver3DDataset and SonarSparseMiddle registered (Argoverse 2 import made optional)"
+}
+register backbones_3d/__init__.py \
+    sonar_sparse_middle:SonarSparseMiddle ptv3_backbone:PTv3Backbone sst_backbone:SSTBackbone
+register backbones_2d/map_to_bev/__init__.py voxel_column_max:VoxelColumnMaxScatter
+echo "[3/5] registered: Diver3DDataset, SonarSparseMiddle, PTv3Backbone, SSTBackbone, VoxelColumnMaxScatter"
 
 # 3b. let train.py take the seed from $PCDET_SEED (default 666, OpenPCDet's fixed value),
 #     so the same experiment can be repeated with a second seed
