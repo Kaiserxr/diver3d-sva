@@ -220,7 +220,8 @@ python ~/projects/diver3d-sva/scripts/check_gpu_stack.py
 ```
 
 📋 Paste the setup script's `[1/5]`…`[5/5]` lines and the summary.
-`OpenPCDet CUDA ops` must say **PASS**. (`torch_scatter` SKIP is expected; we only need it for DSVT later.)
+`OpenPCDet CUDA ops` must say **PASS**, and `Run A / Run B middle stages` should too.
+(`torch_scatter` SKIP is expected; it's installed in Part 4.)
 
 Record the exact environment so runs can be reproduced:
 
@@ -348,7 +349,156 @@ either way means something is wrong.
 
 ---
 
-# Part 4: day-to-day
+# Part 4: sparse conv vs DSVT-V (the main experiment)
+
+The plan and every design choice are in [docs/DSVT_PLAN.md](docs/DSVT_PLAN.md). Two
+models, identical except for the 3D middle stage:
+
+| Run | Config | Middle stage |
+|---|---|---|
+| A (control) | `centerpoint_sparseconv` | `SonarSparseMiddle`: sparse 3D conv, height 10 → 5 → 2 |
+| B | `dsvt_voxel` | DSVT-V: sparse voxel attention, height 10 → 5 → 3 → 1 |
+
+Do Part 1 first (at least through Step 9). If you set up before this part existed,
+start at 4.1; otherwise skip to 4.2.
+
+## 4.1 Get the new code
+
+```bash
+conda activate sva
+cd ~/projects/diver3d-sva && git pull
+bash scripts/setup_openpcdet.sh ~/data/diver3d_v2
+```
+
+The setup script should print `[3/5] Diver3DDataset and SonarSparseMiddle registered`
+and `[3b] train.py seed now read from $PCDET_SEED`. No rebuild is needed: the new
+middle stage is plain Python.
+
+## 4.2 Install torch_scatter (needed by the voxel encoder of both runs)
+
+```bash
+conda activate sva
+pip install torch_scatter -f https://data.pyg.org/whl/torch-2.7.0+cu128.html
+python ~/projects/diver3d-sva/scripts/check_gpu_stack.py
+```
+
+📋 Paste the summary. The two new lines must say **PASS**:
+- `torch_scatter on GPU`
+- `Run A / Run B middle stages`: this builds both middle stages from the real
+  configs, runs a forward and backward pass, and checks they produce the **same BEV
+  shape** `(2, 128, 100, 120)`. It also prints each one's parameter count.
+
+> **If `torch_scatter on GPU` FAILS** (no Blackwell kernels in the wheel), build it from
+> source. It takes about 10 minutes, so use tmux:
+> ```bash
+> tmux new -s scatter
+> conda activate sva
+> pip uninstall -y torch_scatter
+> pip install --no-build-isolation --no-binary torch_scatter torch_scatter
+> python ~/projects/diver3d-sva/scripts/check_gpu_stack.py
+> ```
+
+Then check that data loads with the new configs (voxels are now built on the GPU, so
+the script shows that instead of a voxel array):
+
+```bash
+python ~/projects/diver3d-sva/scripts/check_dataset.py dsvt_voxel
+```
+
+## 4.3 Sanity checks: both runs must memorise 105 frames (about 30–40 min total)
+
+Same idea as Part 2. Both run one after the other in one tmux session:
+
+```bash
+tmux new -s sanityAB
+```
+
+Inside tmux:
+
+```bash
+conda activate sva
+cd ~/projects/diver3d-sva
+bash scripts/train.sh centerpoint_sparseconv_overfit sanity --num_epochs_to_eval 5 ; \
+bash scripts/train.sh dsvt_voxel_overfit sanity --num_epochs_to_eval 5
+```
+
+Detach (`Ctrl+b`, `d`). When both logs end with `finished ... exit code 0`:
+
+```bash
+cd ~/projects/diver3d-sva
+for c in centerpoint_sparseconv_overfit dsvt_voxel_overfit; do echo "=== $c"; \
+  grep "Loss:" logs/${c}__sanity__*.log | sed -n '1p;$p'; \
+  grep -E "EPOCH [0-9]+ EVALUATION|  (mAP3D|AP3D@0.35|APBEV@0.35) " logs/${c}__sanity__*.log | tail -8; done
+```
+
+📋 Paste it. Both should show loss falling a lot and APBEV@0.35 high on these frames.
+If DSVT clearly fails while the sparse conv succeeds, **stop and tell me**: that's the
+learning-rate risk from the plan, and it's cheaper to fix now than after a 20-epoch run.
+
+## 4.4 The real runs: A then B, seed 666
+
+One GPU, so run them **one after the other**, never at the same time. Running them
+side by side would slow both and make the speed comparison meaningless.
+
+```bash
+tmux new -s runAB
+```
+
+Inside tmux:
+
+```bash
+conda activate sva
+cd ~/projects/diver3d-sva
+bash scripts/train.sh centerpoint_sparseconv runA_s666 --num_epochs_to_eval 20 ; \
+bash scripts/train.sh dsvt_voxel runB_s666 --num_epochs_to_eval 20
+```
+
+📋 After about 15 minutes, paste `tail -n 20` of the Run A log so we can estimate the total time:
+
+```bash
+tail -n 20 ~/projects/diver3d-sva/logs/centerpoint_sparseconv__runA_s666__*.log
+```
+
+When both have finished, list each run's per-epoch scores:
+
+```bash
+cd ~/projects/diver3d-sva
+for r in centerpoint_sparseconv__runA_s666 dsvt_voxel__runB_s666; do echo "=== $r"; \
+  grep -E "EPOCH [0-9]+ EVALUATION|  (SDS|mAP3D|AP3D@0.35|AP3D@0.50) " logs/${r}__*.log; done
+```
+
+📋 Paste it. For each run, pick the epoch with the best AP3D@0.35, ignoring epochs 1–4,
+and score it on the full val set as in Part 3. Replace `N` (and the config/tag for Run B):
+
+```bash
+cd ~/projects/diver3d-sva/third_party/OpenPCDet/tools
+python test.py --cfg_file cfgs/diver3d_models/centerpoint_sparseconv.yaml --extra_tag runA_s666 \
+    --ckpt ../output/diver3d_models/centerpoint_sparseconv/runA_s666/ckpt/checkpoint_epoch_N.pth \
+    --eval_tag full_val_epN --set DATA_CONFIG.SUBSAMPLE.test 1 \
+    2>&1 | tee ~/projects/diver3d-sva/logs/centerpoint_sparseconv__runA_s666__full_val_epN.log
+```
+
+📋 Paste both score blocks.
+
+## 4.5 Second seed
+
+Same two runs with seed 1234. `SEED` sets it, and the tag records it:
+
+```bash
+tmux new -s runAB2
+conda activate sva
+cd ~/projects/diver3d-sva
+SEED=1234 bash scripts/train.sh centerpoint_sparseconv runA_s1234 --num_epochs_to_eval 20 ; \
+SEED=1234 bash scripts/train.sh dsvt_voxel runB_s1234 --num_epochs_to_eval 20
+```
+
+Then pick and full-val score the best epochs as in 4.4. With two seeds per run, we
+report the mean and spread. A difference smaller than the spread between seeds
+isn't a real difference.
+
+---
+
+# Part 5: day-to-day
 
 **Get new code** (after I push changes):
 
@@ -413,5 +563,5 @@ changes in the log header.
   frame without boxes (`pcdet/datasets/dataset.py`, around line 212) and draws another
   frame instead. About 27% of Diver3D frames have no diver, and the paper treats them
   as real negatives. Evaluation still includes them. To revisit later.
-- **One seed.** OpenPCDet's `--fix_random_seed` always uses seed 666. A second seed
-  needs a small patch, which comes later.
+- **Seeds.** Runs use seed 666 unless you set `SEED=...` in front of `train.sh`
+  (the setup script patches OpenPCDet's `train.py` to read it). Put the seed in the tag.

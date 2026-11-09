@@ -1,0 +1,144 @@
+# SANITY CHECK ONLY: train and evaluate on the same ~105 training frames.
+# Identical to dsvt_voxel.yaml except the lines marked OVERFIT.
+
+# RUN B of docs/DSVT_PLAN.md: DSVT-V sparse voxel attention middle stage.
+# Identical to centerpoint_sparseconv.yaml except BACKBONE_3D and MAP_TO_BEV.
+
+CLASS_NAMES: ['Diver']
+
+DATA_CONFIG:
+    _BASE_CONFIG_: cfgs/dataset_configs/diver3d_dataset.yaml
+    DATA_SPLIT: {'train': train, 'test': train}   # OVERFIT: evaluate on training frames
+    SUBSAMPLE: {'train': 200, 'test': 200}         # OVERFIT: same ~105 frames both ways
+    DATA_PROCESSOR:
+        - NAME: mask_points_and_boxes_outside_range
+          REMOVE_OUTSIDE_BOXES: True
+
+        - NAME: shuffle_points
+          SHUFFLE_ENABLED: {
+            'train': True,
+            'test': False
+          }
+
+        # voxels are built on the GPU by DynamicVoxelVFE; this only sets the grid:
+        # 0.1 x 0.1 x 0.5 m over [0,12] x [-5,5] x [-2.5,2.5] m -> 120 x 100 x 10 (paper)
+        - NAME: transform_points_to_voxels_placeholder
+          VOXEL_SIZE: [0.1, 0.1, 0.5]
+
+MODEL:
+    NAME: CenterPoint
+
+    VFE:
+        NAME: DynamicVoxelVFE          # VoxelNet-style point-to-voxel encoder, 128 ch (paper)
+        WITH_DISTANCE: False
+        USE_ABSLOTE_XYZ: True
+        USE_NORM: True
+        NUM_FILTERS: [128, 128]
+
+    # ---- middle stage: the ONLY part that differs from centerpoint_sparseconv.yaml ----
+    # DSVT-V scaled from Waymo to the 12 x 10 x 5 m Diver3D crop; see docs/DSVT_PLAN.md section 5.
+    BACKBONE_3D:
+        NAME: DSVT
+        INPUT_LAYER:
+            sparse_shape: [120, 100, 10]                    # x, y, z voxels (Waymo: 468, 468, 32)
+            downsample_stride: [[1, 1, 2], [1, 1, 2], [1, 1, 3]]   # pool height only: 10 -> 5 -> 3 -> 1
+            d_model: [128, 128, 128, 128]
+            set_info: [[48, 1], [48, 1], [48, 1], [48, 1]]  # [voxels per set, blocks] per stage
+            window_shape: [[16, 16, 10], [16, 16, 5], [16, 16, 3], [16, 16, 1]]   # 1.6 m windows, full height
+            hybrid_factor: [2, 2, 1]                        # alternate with 32 x 32 (3.2 m) windows
+            shifts_list: [[[0, 0, 0], [8, 8, 0]], [[0, 0, 0], [8, 8, 0]], [[0, 0, 0], [8, 8, 0]], [[0, 0, 0], [8, 8, 0]]]
+            normalize_pos: False
+
+        block_name: ['DSVTBlock', 'DSVTBlock', 'DSVTBlock', 'DSVTBlock']
+        set_info: [[48, 1], [48, 1], [48, 1], [48, 1]]
+        d_model: [128, 128, 128, 128]
+        nhead: [8, 8, 8, 8]
+        dim_feedforward: [256, 256, 256, 256]
+        dropout: 0.0
+        activation: gelu
+        reduction_type: 'attention'
+        output_shape: [120, 100]
+        conv_out_channel: 128
+
+    MAP_TO_BEV:
+        NAME: PointPillarScatter3d     # last stage is 1 voxel tall -> 128 BEV channels, 100 x 120
+        INPUT_SHAPE: [120, 100, 1]
+        NUM_BEV_FEATURES: 128
+    # ---- end of middle stage ----
+
+    BACKBONE_2D:
+        NAME: BaseBEVBackbone          # -> 768 ch at 60 x 50 (0.2 m cells), as in the paper
+        LAYER_NUMS: [5, 5]
+        LAYER_STRIDES: [2, 2]          # two levels: 100 is not divisible by 8
+        NUM_FILTERS: [128, 256]
+        UPSAMPLE_STRIDES: [1, 2]
+        NUM_UPSAMPLE_FILTERS: [384, 384]
+
+    DENSE_HEAD:
+        NAME: CenterHead
+        CLASS_AGNOSTIC: False
+        CLASS_NAMES_EACH_HEAD: [
+            ['Diver']
+        ]
+
+        SHARED_CONV_CHANNEL: 64
+        USE_BIAS_BEFORE_NORM: True
+        NUM_HM_CONV: 2
+        SEPARATE_HEAD_CFG:
+            HEAD_ORDER: ['center', 'center_z', 'dim', 'rot']
+            HEAD_DICT: {
+                'center': {'out_channels': 2, 'num_conv': 2},
+                'center_z': {'out_channels': 1, 'num_conv': 2},
+                'dim': {'out_channels': 3, 'num_conv': 2},
+                'rot': {'out_channels': 2, 'num_conv': 2},     # yaw as (sin, cos); 6D rotation comes later
+            }
+
+        TARGET_ASSIGNER_CONFIG:
+            FEATURE_MAP_STRIDE: 2      # head sees 60 x 50 cells of 0.2 m
+            NUM_MAX_OBJS: 100
+            GAUSSIAN_OVERLAP: 0.7      # paper
+            MIN_RADIUS: 2
+
+        LOSS_CONFIG:
+            LOSS_WEIGHTS: {
+                'cls_weight': 1.0,     # paper: all loss terms have unit weight
+                'loc_weight': 1.0,
+                'code_weights': [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+            }
+
+        POST_PROCESSING:               # paper: <= 100 peaks, score >= 0.30, rotated BEV NMS at 0.10
+            SCORE_THRESH: 0.3
+            POST_CENTER_LIMIT_RANGE: [-1.0, -6.0, -3.5, 13.0, 6.0, 3.5]
+            MAX_OBJ_PER_SAMPLE: 100
+            NMS_CONFIG:
+                NMS_TYPE: nms_gpu
+                NMS_THRESH: 0.1
+                NMS_PRE_MAXSIZE: 4096
+                NMS_POST_MAXSIZE: 100
+
+    POST_PROCESSING:
+        RECALL_THRESH_LIST: [0.3, 0.5, 0.7]
+        EVAL_METRIC: diver3d
+
+
+# paper: AdamW, peak LR 1e-3, weight decay 1e-2, grad clip 35, batch 4, 20 epochs, FP32
+OPTIMIZATION:
+    BATCH_SIZE_PER_GPU: 4
+    NUM_EPOCHS: 40   # OVERFIT: more passes over few frames
+
+    OPTIMIZER: adam_onecycle
+    LR: 0.001
+    WEIGHT_DECAY: 0.01
+    MOMENTUM: 0.9
+
+    MOMS: [0.95, 0.85]
+    PCT_START: 0.4
+    DIV_FACTOR: 10
+    DECAY_STEP_LIST: [35, 45]
+    LR_DECAY: 0.1
+    LR_CLIP: 0.0000001
+
+    LR_WARMUP: False
+    WARMUP_EPOCH: 1
+
+    GRAD_NORM_CLIP: 35

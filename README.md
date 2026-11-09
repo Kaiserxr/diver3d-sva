@@ -9,9 +9,10 @@ head fixed, and swap only the 3D middle stage — a sparse 3D convolution
 backbone versus a sparse voxel attention backbone, starting with
 [DSVT-V](https://arxiv.org/abs/2301.06051).
 
-> **Status: work in progress.** What works today: the Diver3D dataset loader for
-> OpenPCDet, scoring with the official Diver3D evaluator, a PointPillars config and
-> a zero-shot evaluation script. The sparse-conv and DSVT-V configs are next.
+> **Status: work in progress.** In place: the Diver3D dataset loader for OpenPCDet,
+> scoring with the official Diver3D evaluator, a PointPillars baseline, a zero-shot
+> evaluation script, and the sparse-conv vs DSVT-V configs
+> ([plan](docs/DSVT_PLAN.md)). None of the new configs has been trained yet.
 
 ## What is in this repo
 
@@ -21,6 +22,7 @@ are fetched separately.
 ```
 overlay/                     files linked into OpenPCDet at the same paths
   pcdet/datasets/diver3d/    Diver3DDataset: loads frames, scores with the official evaluator
+  pcdet/models/backbones_3d/sonar_sparse_middle.py   SonarSparseMiddle: sparse conv middle stage (Run A)
   tools/cfgs/dataset_configs/diver3d_dataset.yaml   crop, voxel size, splits
   tools/cfgs/diver3d_models/ one config per model
 zeroshot/                    run pretrained LiDAR checkpoints on Diver3D, with results
@@ -80,8 +82,16 @@ To score a single checkpoint, run from `third_party/OpenPCDet/tools`:
 python test.py --cfg_file cfgs/diver3d_models/pointpillar.yaml --ckpt <checkpoint.pth>
 ```
 
-`pointpillar_overfit.yaml` is a sanity check: it trains and evaluates on the same
-105 training frames.
+Configs in `overlay/tools/cfgs/diver3d_models/`:
+
+| Config | What |
+|---|---|
+| `pointpillar` | PointPillars baseline (yaw-only anchors) |
+| `centerpoint_sparseconv` | Run A: sparse 3D conv middle stage (`SonarSparseMiddle`) + CenterHead |
+| `dsvt_voxel` | Run B: DSVT-V sparse voxel attention middle stage + the same CenterHead |
+| `*_overfit` | sanity checks: train and evaluate on the same 105 training frames |
+
+Runs A and B are identical except for the 3D middle stage; see [docs/DSVT_PLAN.md](docs/DSVT_PLAN.md).
 
 Evaluation writes predictions in the Diver3D submission format and scores them
 with the dataset's official `tools/diver3d_eval.py` (SDS, mAP3D, AP3D, AOE3D, …).
@@ -99,7 +109,8 @@ per-epoch checkpoint selection; set `SUBSAMPLE.test: 1` for the full split.
   measured with the official evaluator on those oracle boxes.
 - **Empty frames skipped in training.** OpenPCDet's `DatasetTemplate` skips training
   frames without boxes; about 27% of Diver3D frames contain no diver.
-- **One seed.** OpenPCDet's `--fix_random_seed` always uses seed 666.
+- **Seeds.** OpenPCDet hard-codes seed 666; the setup script patches `train.py` to read
+  `$PCDET_SEED` instead, and `SEED=1234 bash scripts/train.sh ...` sets it.
 - **Validation only.** Diver3D test labels are withheld, so all results here
   are on the validation split.
 

@@ -1,6 +1,7 @@
 # Plan: sparse conv vs DSVT-V on Diver3D
 
-**Status: proposal, waiting for approval. No code for this plan exists yet.**
+**Status: approved and implemented (configs `centerpoint_sparseconv.yaml`, `dsvt_voxel.yaml`).
+Not trained yet; run it with Part 4 of [LAB_RUNBOOK.md](../LAB_RUNBOOK.md).**
 
 ## 1. The question
 
