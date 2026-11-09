@@ -1,5 +1,5 @@
 DATASET: 'Diver3DDataset'
-DATA_PATH: '/content/diver3d_v2'
+DATA_PATH: '../data/diver3d'   # link made by scripts/setup_openpcdet.sh
 
 # SonarVoxNet paper crop: keeps 89.1% of points and 99.9% of divers
 POINT_CLOUD_RANGE: [0, -5, -2.5, 12, 5, 2.5]
