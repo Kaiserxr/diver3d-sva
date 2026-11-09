@@ -61,14 +61,27 @@ The setup script:
 
 It is safe to run again.
 
+For a complete walkthrough on a fresh Ubuntu machine without admin rights
+(conda, CUDA toolkit, an RTX 50-series / Blackwell GPU, tmux), see
+[LAB_RUNBOOK.md](LAB_RUNBOOK.md). `python scripts/check_gpu_stack.py` checks
+the GPU software stack, and `python scripts/check_dataset.py` checks data loading.
+
 ## Training and evaluation
 
-From `third_party/OpenPCDet/tools`:
+```bash
+bash scripts/train.sh pointpillar my_run --num_epochs_to_eval 20      # train, then score every epoch
+```
+
+`scripts/train.sh` wraps OpenPCDet's `train.py`. It fixes the seed, refuses to reuse
+a run tag, and writes a log in `logs/` that records the git commit and exact command.
+To score a single checkpoint, run from `third_party/OpenPCDet/tools`:
 
 ```bash
-python train.py --cfg_file cfgs/diver3d_models/pointpillar.yaml --fix_random_seed
-python test.py  --cfg_file cfgs/diver3d_models/pointpillar.yaml --ckpt <checkpoint.pth>
+python test.py --cfg_file cfgs/diver3d_models/pointpillar.yaml --ckpt <checkpoint.pth>
 ```
+
+`pointpillar_overfit.yaml` is a sanity check: it trains and evaluates on the same
+105 training frames.
 
 Evaluation writes predictions in the Diver3D submission format and scores them
 with the dataset's official `tools/diver3d_eval.py` (SDS, mAP3D, AP3D, AOE3D, …).
@@ -81,6 +94,11 @@ per-epoch checkpoint selection; set `SUBSAMPLE.test: 1` for the full split.
   its tightest yaw-only box, as standard LiDAR detectors expect. Pitch and roll are
   therefore not learned, which caps AP3D and AOE3D. A full-rotation (6D) head is
   planned.
+- **Yaw-only ceiling.** Even the tightest upright box placed perfectly on every
+  diver scores only AP3D@0.35 = 0.936, AP3D@0.50 = 0.658 and AOE3D = 65.0° on val,
+  measured with the official evaluator on those oracle boxes.
+- **Empty frames skipped in training.** OpenPCDet's `DatasetTemplate` skips training
+  frames without boxes; about 27% of Diver3D frames contain no diver.
 - **One seed.** OpenPCDet's `--fix_random_seed` always uses seed 666.
 - **Validation only.** Diver3D test labels are withheld, so all results here
   are on the validation split.
