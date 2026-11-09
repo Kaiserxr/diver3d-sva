@@ -1,0 +1,13 @@
+# OpenPCDet checkout created by scripts/setup_openpcdet.sh
+third_party/
+
+# training outputs, checkpoints, logs
+output/
+logs/
+*.pth
+*.ckpt
+
+# python
+__pycache__/
+*.pyc
+*.egg-info/

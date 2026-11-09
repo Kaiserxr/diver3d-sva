@@ -1,0 +1,47 @@
+DATASET: 'Diver3DDataset'
+DATA_PATH: '/content/diver3d_v2'
+
+# SonarVoxNet paper crop: keeps 89.1% of points and 99.9% of divers
+POINT_CLOUD_RANGE: [0, -5, -2.5, 12, 5, 2.5]
+
+DATA_SPLIT: {
+    'train': train,
+    'test': val
+}
+
+# every k-th frame; val subset for per-epoch checkpoint selection (set test: 1 for the full val)
+SUBSAMPLE: {
+    'train': 1,
+    'test': 4
+}
+
+INTENSITY_SCALE: 1.0
+
+POINT_FEATURE_ENCODING: {
+    encoding_type: absolute_coordinates_encoding,
+    used_feature_list: ['x', 'y', 'z', 'intensity'],
+    src_feature_list: ['x', 'y', 'z', 'intensity'],
+}
+
+# paper protocol for baselines: no augmentation
+DATA_AUGMENTOR:
+    DISABLE_AUG_LIST: ['placeholder']
+    AUG_CONFIG_LIST: []
+
+DATA_PROCESSOR:
+    - NAME: mask_points_and_boxes_outside_range
+      REMOVE_OUTSIDE_BOXES: True
+
+    - NAME: shuffle_points
+      SHUFFLE_ENABLED: {
+        'train': True,
+        'test': False
+      }
+
+    - NAME: transform_points_to_voxels
+      VOXEL_SIZE: [0.1, 0.1, 0.5]
+      MAX_POINTS_PER_VOXEL: 35
+      MAX_NUMBER_OF_VOXELS: {
+        'train': 16000,
+        'test': 16000
+      }
