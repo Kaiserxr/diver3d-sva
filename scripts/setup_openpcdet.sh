@@ -8,7 +8,8 @@
 #      so every machine runs the same library code.
 #   2. Links our files (overlay/) into it. They are *links*, not copies, so an edit
 #      on either side is the same file and git sees it in this repo.
-#   3. Registers Diver3DDataset in OpenPCDet's dataset list.
+#   3. Registers Diver3DDataset in OpenPCDet's dataset list, and makes the unused
+#      Argoverse 2 loader optional (it would otherwise require av2 + kornia).
 #   4. Replaces np.int / np.float (removed in numpy >= 1.24) with int / float.
 #   5. Links the Diver3D data folder to third_party/OpenPCDet/data/diver3d.
 #      The data itself is never copied or modified.
@@ -67,9 +68,16 @@ if 'Diver3DDataset' not in s:
                   "    'Diver3DDataset': Diver3DDataset\n", 1)
     if 'Diver3DDataset' not in s or "'Diver3DDataset': Diver3DDataset" not in s:
         sys.exit('could not register Diver3DDataset: OpenPCDet __init__.py changed shape')
-    open(p, 'w', encoding='utf-8').write(s)
+# The Argoverse 2 loader needs the av2 + kornia packages just to import pcdet.datasets.
+# Diver3D never uses it, so make that one import optional instead of installing them.
+argo = "from .argo2.argo2_dataset import Argo2Dataset\n"
+if argo in s and 'Argo2Dataset = None' not in s:
+    s = s.replace(argo, "try:\n    " + argo +
+                  "except ImportError:  # needs av2 + kornia; unused for Diver3D\n"
+                  "    Argo2Dataset = None\n", 1)
+open(p, 'w', encoding='utf-8').write(s)
 EOF
-echo "[3/5] Diver3DDataset registered"
+echo "[3/5] Diver3DDataset registered (Argoverse 2 import made optional)"
 
 # 4. numpy >= 1.24 compatibility (np.int32 / np.float32 are untouched)
 grep -rlE 'np\.(int|float)\b' "$PCDET/pcdet" --include='*.py' \
