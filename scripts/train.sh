@@ -9,6 +9,12 @@
 #
 # Run it inside tmux (see LAB_RUNBOOK.md) so it survives a dropped AnyDesk session.
 #
+# Interrupted (reboot, crash)? Rerun the exact same command with RESUME=1 in front:
+#   RESUME=1 bash scripts/train.sh pointpillar baseline_s666 --num_epochs_to_eval 20
+# A run that already finished is skipped; a half-finished one continues from its last
+# saved epoch (OpenPCDet restores the weights, optimizer and learning-rate schedule);
+# a run with no checkpoints starts normally. So a whole queue can simply be rerun.
+#
 # Outputs:
 #   logs/<config>__<tag>__<time>.log          full console log (git commit, command, losses, scores)
 #   third_party/OpenPCDet/output/diver3d_models/<config>/<tag>/
@@ -30,9 +36,18 @@ CFG="cfgs/diver3d_models/$CFG_NAME.yaml"
 OUT="$REPO/third_party/OpenPCDet/output/diver3d_models/$CFG_NAME/$TAG"
 
 [[ -f "$TOOLS/$CFG" ]] || { echo "no such config: $TOOLS/$CFG"; exit 1; }
+if [[ -f "$OUT/FINISHED" ]]; then
+    echo "run '$TAG' already finished ($(cat "$OUT/FINISHED")); skipping"
+    [[ "${RESUME:-0}" == 1 ]] && exit 0 || exit 1
+fi
 if [[ -d "$OUT/ckpt" ]] && ls "$OUT/ckpt"/*.pth >/dev/null 2>&1; then
-    echo "run '$TAG' already has checkpoints in $OUT"
-    echo "pick a new tag, or delete that folder if you really want to start over"; exit 1
+    if [[ "${RESUME:-0}" == 1 ]]; then
+        echo "run '$TAG' was interrupted: resuming from its latest checkpoint"
+    else
+        echo "run '$TAG' already has checkpoints in $OUT"
+        echo "to continue it: RESUME=1 bash scripts/train.sh $CFG_NAME $TAG ..."
+        echo "otherwise pick a new tag, or delete that folder to start over"; exit 1
+    fi
 fi
 
 SEED="${SEED:-666}"
@@ -52,6 +67,7 @@ CMD=(python train.py --cfg_file "$CFG" --extra_tag "$TAG" --fix_random_seed --wo
     echo "openpcdet:   $(git -C "$REPO/third_party/OpenPCDet" rev-parse --short HEAD)"
     echo "gpu:         $(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader)"
     echo "seed:        $SEED"
+    echo "resume:      ${RESUME:-0}"
     echo "command:     (cd $TOOLS && ${CMD[*]})"
     echo "output dir:  $OUT"
     echo
@@ -62,4 +78,5 @@ set +e
 "${CMD[@]}" 2>&1 | tee -a "$LOG"
 STATUS=${PIPESTATUS[0]}
 echo -e "\nfinished $(date -Is) with exit code $STATUS" | tee -a "$LOG"
+[[ "$STATUS" == 0 ]] && echo "$(date -Is), log $LOG" > "$OUT/FINISHED"
 exit "$STATUS"
