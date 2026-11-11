@@ -53,7 +53,7 @@ Requires Linux, an NVIDIA GPU, and a Python environment with PyTorch and
 git clone https://github.com/Kaiserxr/diver3d-sva.git
 cd diver3d-sva
 bash scripts/setup_openpcdet.sh /path/to/diver3d_v2
-cd third_party/OpenPCDet && python setup.py develop
+cd third_party/OpenPCDet && pip install --no-build-isolation -e .
 ```
 
 The setup script:

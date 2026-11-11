@@ -215,7 +215,7 @@ python ~/projects/diver3d-sva/scripts/check_gpu_stack.py
 conda activate sva
 cd ~/projects/diver3d-sva
 bash scripts/setup_openpcdet.sh ~/data/diver3d_v2
-cd third_party/OpenPCDet && python setup.py develop 2>&1 | tail -5
+cd third_party/OpenPCDet && pip install --no-build-isolation -e . 2>&1 | tail -5   # builds the CUDA ops, ~5-10 min
 python ~/projects/diver3d-sva/scripts/check_gpu_stack.py
 ```
 

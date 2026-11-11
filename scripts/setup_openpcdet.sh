@@ -17,7 +17,7 @@
 #   5. Links the Diver3D data folder to third_party/OpenPCDet/data/diver3d.
 #      The data itself is never copied or modified.
 #
-# It does NOT build the CUDA extensions; that is `python setup.py develop`,
+# It does NOT build the CUDA extensions; that is `pip install --no-build-isolation -e .`,
 # run afterwards inside the conda environment (see LAB_RUNBOOK.md).
 set -euo pipefail
 
@@ -126,6 +126,18 @@ if 'PCDET_SEED' not in s:
 EOF
 echo "[3b]  train.py seed now read from \$PCDET_SEED (default 666)"
 
+# 3c. DSVT's attention pooling builds an all-zero *int* padding mask; PyTorch >= 2.x only
+#     accepts bool/float masks. Older PyTorch silently converted it to bool, so .bool() is the
+#     same behaviour (all False = "nothing is padding").
+DSVT_PY="$PCDET/pcdet/models/backbones_3d/dsvt.py"
+OLD_MASK='key_padding_mask = torch.zeros((pooled_voxel_num, pool_volume)).to(prepool_features.device).int()'
+if grep -qF "$OLD_MASK" "$DSVT_PY"; then
+    sed -i 's/(pooled_voxel_num, pool_volume)).to(prepool_features.device).int()/(pooled_voxel_num, pool_volume)).to(prepool_features.device).bool()/' "$DSVT_PY"
+fi
+grep -qF '(pooled_voxel_num, pool_volume)).to(prepool_features.device).bool()' "$DSVT_PY" \
+    || { echo "could not patch the DSVT pooling mask: dsvt.py changed shape"; exit 1; }
+echo "[3c]  DSVT pooling mask is now bool (PyTorch 2.x)"
+
 # 4. numpy >= 1.24 compatibility (np.int32 / np.float32 are untouched)
 grep -rlE 'np\.(int|float)\b' "$PCDET/pcdet" --include='*.py' \
     | xargs -r sed -i -E 's/np\.int\b/int/g; s/np\.float\b/float/g'
@@ -137,4 +149,4 @@ ln -sfn "$DATA_ROOT" "$PCDET/data/diver3d"
 echo "[5/5] data: $PCDET/data/diver3d -> $DATA_ROOT"
 
 echo
-echo "Done. Next, inside the conda env:  cd $PCDET && python setup.py develop"
+echo "Done. Next, inside the conda env:  cd $PCDET && pip install --no-build-isolation -e ."
