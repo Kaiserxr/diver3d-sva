@@ -138,6 +138,16 @@ grep -qF '(pooled_voxel_num, pool_volume)).to(prepool_features.device).bool()' "
     || { echo "could not patch the DSVT pooling mask: dsvt.py changed shape"; exit 1; }
 echo "[3c]  DSVT pooling mask is now bool (PyTorch 2.x)"
 
+# 3d. PyTorch >= 2.6 loads checkpoints with weights_only=True by default, which rejects the
+#     numpy values OpenPCDet stores in them, so evaluation and resuming crash. These are
+#     checkpoints our own runs write, so load them the pre-2.6 way (weights_only=False).
+TEMPLATE_PY="$PCDET/pcdet/models/detectors/detector3d_template.py"
+sed -i 's/map_location=loc_type)/map_location=loc_type, weights_only=False)/' "$TEMPLATE_PY"
+[[ $(grep -c 'map_location=loc_type, weights_only=False)' "$TEMPLATE_PY") -eq 4 && \
+   $(grep -c 'map_location=loc_type)' "$TEMPLATE_PY") -eq 0 ]] \
+    || { echo "could not patch checkpoint loading: detector3d_template.py changed shape"; exit 1; }
+echo "[3d]  checkpoints load with weights_only=False (PyTorch 2.6+)"
+
 # 4. numpy >= 1.24 compatibility (np.int32 / np.float32 are untouched)
 grep -rlE 'np\.(int|float)\b' "$PCDET/pcdet" --include='*.py' \
     | xargs -r sed -i -E 's/np\.int\b/int/g; s/np\.float\b/float/g'
