@@ -49,8 +49,10 @@ def block(lines, epoch):
     for i, l in enumerate(lines):
         if re.search(rf'EPOCH {epoch} EVALUATION', l):
             res = {}
-            for m in lines[i + 1:i + 40]:
-                p = m.split()
+            for m in lines[i + 1:]:              # progress bars can sit between header and scores
+                if 'EVALUATION' in m:
+                    break                        # next epoch's block: this one had no scores
+                p = re.sub(r'\x1b\[[0-9;]*m', '', m).split()
                 if len(p) == 2 and p[0] in KEYS:
                     res[p[0]] = float(p[1])
                 t = re.search(r'\((\d+) TPs / (\d+) GT', m)
