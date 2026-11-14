@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Score saved predictions separately for each distance from the sonar.
+"""Score saved predictions separately for each distance (or angle) from the sonar.
 
 Every training run already saved its val predictions after each epoch. This script re-scores
 them with the official Diver3D scorer (tools/diver3d_eval.py in the data folder), once for all
@@ -10,17 +10,22 @@ boxes and once per distance band. No GPU and no retraining needed.
     python scripts/eval_by_range.py --epochs 16-20      # average of the last 5 epochs
     python scripts/eval_by_range.py --bins 0,3,6        # other bands: 0-3 m, 3-6 m, 6+ m
     python scripts/eval_by_range.py --pred some.json    # score one prediction file
+    python scripts/eval_by_range.py --by angle          # by bearing: 0-15, 15-30, 30+ deg off-centre
+    python scripts/eval_by_range.py --by grid           # every distance band x every angle band
 
 How a band is scored: distance = horizontal distance of the box centre from the sonar,
 sqrt(x^2 + y^2). Ground-truth boxes are kept by their own distance, predicted boxes by theirs,
 then the official scorer runs on what is left. So a detection near a band edge can fall into
 the neighbouring band from its ground truth (it then counts as a miss in one band and a false
 alarm in the other). That is the usual way range breakdowns are computed.
+Angle = bearing of the box centre, |atan2(y, x)| in degrees: 0 = straight ahead of the sonar,
+larger = towards the edge of the beam (Diver3D divers are all within about 45 deg). --by grid
+crosses both, which separates "close" from "off-centre" (close divers also tend to be off-centre).
 
 Per band it reports: number of ground-truth divers, SDS, AP3D@0.35, AP3D@0.50, APBEV@0.35,
 precision and recall (3D IoU >= 0.35, all detections the model outputs, i.e. score >= 0.3), and the
 error terms of the true positives: ATE (m), ASE, AOE3D (deg).
-A full table is also written to logs/range_eval_<epochs>.csv.
+A full table is also written to logs/range_eval_<by>_epochs_<epochs>.csv.
 """
 import argparse
 import csv
@@ -56,23 +61,46 @@ def _dist(box):
     return math.hypot(float(box.center[0]), float(box.center[1]))
 
 
-def bands(edges):
-    out = [('all', -math.inf, math.inf)]
-    for lo, hi in zip(edges, edges[1:] + [math.inf]):
-        out.append((f'{lo:g}-{hi:g} m' if hi != math.inf else f'{lo:g}+ m', lo, hi))
+def _bearing(box):
+    return abs(math.degrees(math.atan2(float(box.center[1]), float(box.center[0]))))
+
+
+def _intervals(edges, unit):
+    return [(f'{lo:g}-{hi:g} {unit}' if hi != math.inf else f'{lo:g}+ {unit}', lo, hi)
+            for lo, hi in zip(edges, edges[1:] + [math.inf])]
+
+
+def make_bands(by, range_edges, angle_edges):
+    """List of (name, dist_lo, dist_hi, angle_lo, angle_hi); the first one is everything."""
+    inf = math.inf
+    out = [('all', -inf, inf, -inf, inf)]
+    if by == 'range':
+        out += [(n, lo, hi, -inf, inf) for n, lo, hi in _intervals(range_edges, 'm')]
+    elif by == 'angle':
+        out += [(n, -inf, inf, lo, hi) for n, lo, hi in _intervals(angle_edges, 'deg')]
+    else:
+        out += [(f'{rn}, {an}', rlo, rhi, alo, ahi)
+                for rn, rlo, rhi in _intervals(range_edges, 'm')
+                for an, alo, ahi in _intervals(angle_edges, 'deg')]
     return out
+
+
+def _in(box, band):
+    _, rlo, rhi, alo, ahi = band
+    return rlo <= _dist(box) < rhi and alo <= _bearing(box) < ahi
 
 
 def score_file(job):
     """Score one prediction file overall and per band. Returns {band: {metric: value} or None}."""
-    pred_path, edges = job
+    pred_path, band_list = job
     pred = _scorer.load_boxes(pred_path, require_score=True, max_file_mb=0)
     pred = {t: v for t, v in pred.items() if t in _gt}
     gt = {t: _gt[t] for t in pred}                      # only the frames that were evaluated
     out = {}
-    for name, lo, hi in bands(edges):
-        g = {t: [b for b in v if lo <= _dist(b) < hi] for t, v in gt.items()}
-        p = {t: [b for b in v if lo <= _dist(b) < hi] for t, v in pred.items()}
+    for band in band_list:
+        name = band[0]
+        g = {t: [b for b in v if _in(b, band)] for t, v in gt.items()}
+        p = {t: [b for b in v if _in(b, band)] for t, v in pred.items()}
         n_gt = sum(len(v) for v in g.values())
         if n_gt == 0:
             out[name] = None
@@ -124,19 +152,23 @@ def main():
     ap.add_argument('--output-root', default=str(REPO / 'third_party' / 'OpenPCDet' / 'output' / 'diver3d_models'))
     ap.add_argument('--runs', default=r'^run[A-Z]_s\d+$', help='regex for the run tags to include')
     ap.add_argument('--epochs', default='6-12', help='epochs to average, e.g. 6-12, 20, 16-20, 6,9,12')
-    ap.add_argument('--bins', default='0,2,4,6', help='band edges in metres; the last band is open-ended')
+    ap.add_argument('--by', choices=['range', 'angle', 'grid'], default='range',
+                    help='split by distance, by bearing angle, or by both (grid)')
+    ap.add_argument('--bins', default='0,2,4,6', help='distance band edges in metres; the last band is open-ended')
+    ap.add_argument('--angle-bins', default='0,15,30', help='bearing band edges in degrees; the last is open-ended')
     ap.add_argument('--pred', help='score this one prediction file instead of the training runs')
     ap.add_argument('--workers', type=int, default=min(16, os.cpu_count() or 1))
     args = ap.parse_args()
 
-    edges = [float(x) for x in args.bins.split(',')]
-    band_names = [b[0] for b in bands(edges)]
+    band_list = make_bands(args.by, [float(x) for x in args.bins.split(',')],
+                           [float(x) for x in args.angle_bins.split(',')])
+    band_names = [b[0] for b in band_list]
     if not (Path(args.data) / 'annotations' / 'gt_val.json').is_file():
         sys.exit(f'no annotations/gt_val.json under {args.data}; pass --data /path/to/diver3d_v2')
 
     if args.pred:
         _init(args.data)
-        print_table(f'{args.pred}', [('file', score_file((args.pred, edges)))], band_names)
+        print_table(f'{args.pred}', [('file', score_file((args.pred, band_list)))], band_names)
         return
 
     epochs = parse_epochs(args.epochs)
@@ -150,7 +182,7 @@ def main():
             for e in epochs:
                 f = run_dir / PRED_FILE.format(e)
                 if f.is_file():
-                    jobs.append((str(f), edges))
+                    jobs.append((str(f), band_list))
                     index.append((cfg_dir.name, run_dir.name, e))
                 else:
                     print(f'  (missing: {cfg_dir.name}/{run_dir.name} epoch {e})')
@@ -182,7 +214,7 @@ def main():
     print_table(f'per run, mean over epochs {args.epochs}', run_rows, band_names)
     print_table(f'per model, mean over seeds (epochs {args.epochs})', model_rows, band_names)
 
-    out_csv = REPO / 'logs' / f'range_eval_epochs_{args.epochs.replace(",", "_")}.csv'
+    out_csv = REPO / 'logs' / f'range_eval_{args.by}_epochs_{args.epochs.replace(",", "_")}.csv'
     out_csv.parent.mkdir(exist_ok=True)
     with open(out_csv, 'w', newline='') as fh:
         w = csv.writer(fh)
