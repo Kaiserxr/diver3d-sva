@@ -93,7 +93,7 @@ def middle_stages():
     try:
         cfgs = {n: cfg_from_yaml_file(f'cfgs/diver3d_models/{n}.yaml', EasyDict())
                 for n in ('centerpoint_sparseconv', 'dsvt_voxel', 'ptv3_voxel', 'sst_voxel',
-                          'hybrid_global_cpe', 'hybrid_global_rope')}
+                          'hybrid_global_cpe', 'hybrid_global_rope', 'centerpoint_sparseconv_rf')}
     finally:
         os.chdir(old)
 

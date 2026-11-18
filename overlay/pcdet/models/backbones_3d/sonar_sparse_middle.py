@@ -14,6 +14,11 @@ shrinks the top-down (x, y) grid, only the height (z), so the BEV map keeps 0.1 
 Config keys (all optional):
     NUM_FILTERS: [64, 64]   channels of the first and second block
     NUM_SUBM:    2          SubM layers per block
+    EXTRA_KERNELS: []       extra SubM layers after the last height reduction, one kernel
+                            (z, y, x) each, e.g. [[1, 5, 5], [1, 5, 5]]. Used by the
+                            "Control-RF" config (experiment 2 in docs/HYBRID_PLAN.md): same place
+                            as the hybrid's attention layers, larger receptive field, no attention.
+                            Empty (default) = Run A exactly.
 """
 from functools import partial
 
@@ -50,6 +55,11 @@ class SonarSparseMiddle(nn.Module):
         self.down2 = post_act_block(c2, c2, (3, 1, 1), norm_fn=norm_fn, stride=(2, 1, 1), padding=0,
                                     indice_key='down2', conv_type='spconv')
 
+        extra = model_cfg.get('EXTRA_KERNELS', [])
+        self.extra = spconv.SparseSequential(*[
+            post_act_block(c2, c2, tuple(k), norm_fn=norm_fn, indice_key=f'extra{i}') for i, k in enumerate(extra)
+        ]) if extra else None
+
         self.out_height = z_after_2                    # 2 for the 10-voxel Diver3D grid
         self.num_point_features = c2
         self.backbone_channels = {'x_conv1': c1, 'x_conv2': c2}
@@ -64,6 +74,8 @@ class SonarSparseMiddle(nn.Module):
         x1 = self.block1(x)
         x2 = self.block2(self.down1(x1))
         out = self.down2(x2)
+        if self.extra is not None:
+            out = self.extra(out)
 
         batch_dict.update({
             'encoded_spconv_tensor': out,
