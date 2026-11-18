@@ -152,7 +152,8 @@ sed -i 's/map_location=loc_type)/map_location=loc_type, weights_only=False)/' "$
 echo "[3d]  checkpoints load with weights_only=False (PyTorch 2.6+)"
 
 # 4. numpy >= 1.24 compatibility (np.int32 / np.float32 are untouched)
-grep -rlE 'np\.(int|float)\b' "$PCDET/pcdet" --include='*.py' \
+# (on a rerun nothing matches any more; grep then exits 1, which must not stop the script)
+{ grep -rlE 'np\.(int|float)\b' "$PCDET/pcdet" --include='*.py' || true; } \
     | xargs -r sed -i -E 's/np\.int\b/int/g; s/np\.float\b/float/g'
 echo "[4/5] np.int / np.float replaced"
 
