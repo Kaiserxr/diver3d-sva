@@ -15,6 +15,11 @@
 # saved epoch (OpenPCDet restores the weights, optimizer and learning-rate schedule);
 # a run with no checkpoints starts normally. So a whole queue can simply be rerun.
 #
+# Disk space: set KEEP_CKPTS to keep only some checkpoints once the run has finished and been
+# scored (scores, predictions and logs are always kept), e.g.
+#   KEEP_CKPTS="10 last" bash scripts/train.sh ...      # epoch 10 + final model, ~0.15 GB per run
+# Without KEEP_CKPTS every epoch's checkpoint is kept (~1.4 GB per 20-epoch run).
+#
 # Outputs:
 #   logs/<config>__<tag>__<time>.log          full console log (git commit, command, losses, scores)
 #   third_party/OpenPCDet/output/diver3d_models/<config>/<tag>/
@@ -79,4 +84,8 @@ set +e
 STATUS=${PIPESTATUS[0]}
 echo -e "\nfinished $(date -Is) with exit code $STATUS" | tee -a "$LOG"
 [[ "$STATUS" == 0 ]] && echo "$(date -Is), log $LOG" > "$OUT/FINISHED"
+# optional: once finished and scored, keep only some checkpoints (saves ~1.3 GB per run)
+if [[ "$STATUS" == 0 && -n "${KEEP_CKPTS:-}" ]]; then
+    bash "$REPO/scripts/prune_checkpoints.sh" --yes --keep "$KEEP_CKPTS" --sanity-keep "$KEEP_CKPTS" "$OUT" | tee -a "$LOG"
+fi
 exit "$STATUS"
