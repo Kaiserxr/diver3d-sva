@@ -8,8 +8,10 @@
 # night is too short the most important runs are done first.
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
+# Disk: each finished run keeps only its epoch-10 and final checkpoints (~0.15 GB instead of ~1.4 GB);
+# all per-epoch scores and predictions are kept. See scripts/prune_checkpoints.sh.
 run() {   # run <config> <tag> <seed> <epochs>
-    RESUME=1 SEED="$3" bash scripts/train.sh "$1" "$2" --num_epochs_to_eval "$4"
+    RESUME=1 SEED="$3" KEEP_CKPTS="10 last" bash scripts/train.sh "$1" "$2" --num_epochs_to_eval "$4"
 }
 
 # experiment 0: tuning the sparse-conv baseline (seed 666; Run A itself is the LR 1e-3 / 20-epoch point)

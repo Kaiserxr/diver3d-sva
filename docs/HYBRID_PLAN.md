@@ -53,7 +53,7 @@ python scripts/check_gpu_stack.py                         # 'middle stages A-D +
 Sanity check first (each must memorise 105 frames, a few minutes each):
 
 ```bash
-for c in hybrid_global_rope hybrid_global_cpe; do bash scripts/train.sh ${c}_overfit sanity --num_epochs_to_eval 5; done
+for c in hybrid_global_rope hybrid_global_cpe; do RESUME=1 KEEP_CKPTS="last" bash scripts/train.sh ${c}_overfit sanity --num_epochs_to_eval 5 --max_ckpt_save_num 5; done
 ```
 
 Then the overnight queue (in tmux; rerun-safe):
@@ -61,6 +61,20 @@ Then the overnight queue (in tmux; rerun-safe):
 ```bash
 bash scripts/queue_hybrid_exp.sh
 ```
+
+### Disk space
+
+The lab PC's main disk is shared and nearly full. Each checkpoint is ~68 MB, so keeping one per
+epoch costs ~1.4 GB per 20-epoch run. Runs therefore keep only what the analysis uses:
+
+- `KEEP_CKPTS="10 last"` (set by the queue): once a run has finished and been scored, only the
+  epoch-10 checkpoint (for `rescore_threshold.sh`) and the final one are kept, ~0.15 GB per run.
+  All per-epoch scores, predictions, logs and TensorBoard curves are always kept.
+- Sanity runs: `--max_ckpt_save_num 5` while training (their evaluation needs the last 5), then
+  `KEEP_CKPTS="last"`.
+- Older runs: `bash scripts/prune_checkpoints.sh` shows what it would delete (dry run);
+  add `--yes` to delete. It skips runs whose last epoch has not been scored.
+- A deleted checkpoint can be recreated by rerunning the training (fixed seeds).
 
 ## Evaluation (same scripts for every model)
 
