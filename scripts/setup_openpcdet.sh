@@ -111,10 +111,11 @@ register backbones_3d/__init__.py \
     sonar_sparse_middle:SonarSparseMiddle sonar_hybrid_middle:SonarHybridMiddle \
     ptv3_backbone:PTv3Backbone sst_backbone:SSTBackbone
 register backbones_2d/map_to_bev/__init__.py voxel_column_max:VoxelColumnMaxScatter
-# FSHNet port (overlay/pcdet/models/fshnet): ".fshnet..." -> "from ..fshnet... import"
-register backbones_3d/__init__.py .fshnet.backbone:FSHNetDiver3D
-register dense_heads/__init__.py .fshnet.head:SparseDynamicHead
-register detectors/__init__.py .fshnet.detector:FSHNetCenterPoint
+# FSHNet port (overlay/pcdet/models/fshnet): ".fshnet.lazy" -> "from ..fshnet.lazy import". These
+# factories import FSHNet's code only when an FSHNet model is built, so it cannot break other models.
+register backbones_3d/__init__.py .fshnet.lazy:FSHNetDiver3D
+register dense_heads/__init__.py .fshnet.lazy:SparseDynamicHead
+register detectors/__init__.py .fshnet.lazy:FSHNetCenterPoint
 echo "[3/5] registered: Diver3DDataset, SonarSparseMiddle, SonarHybridMiddle, PTv3Backbone, SSTBackbone, VoxelColumnMaxScatter, FSHNet (FSHNetDiver3D, SparseDynamicHead, FSHNetCenterPoint)"
 
 # 3b. let train.py take the seed from $PCDET_SEED (default 666, OpenPCDet's fixed value),
