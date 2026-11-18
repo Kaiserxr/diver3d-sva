@@ -92,7 +92,8 @@ def middle_stages():
     os.chdir(tools)
     try:
         cfgs = {n: cfg_from_yaml_file(f'cfgs/diver3d_models/{n}.yaml', EasyDict())
-                for n in ('centerpoint_sparseconv', 'dsvt_voxel', 'ptv3_voxel', 'sst_voxel')}
+                for n in ('centerpoint_sparseconv', 'dsvt_voxel', 'ptv3_voxel', 'sst_voxel',
+                          'hybrid_global_cpe', 'hybrid_global_rope')}
     finally:
         os.chdir(old)
 
@@ -117,7 +118,7 @@ def middle_stages():
         out.mean().backward()
         n_params = sum(p.numel() for p in m3d.parameters())
         shapes[name] = tuple(out.shape)
-        info.append(f'{c.MODEL.BACKBONE_3D.NAME} {n_params / 1e6:.2f}M params -> {tuple(out.shape)}')
+        info.append(f'{name} {n_params / 1e6:.2f}M params -> {tuple(out.shape)}')
     assert len(set(shapes.values())) == 1, f'BEV shapes differ: {shapes}'
     assert shapes['dsvt_voxel'] == (2, 128, 100, 120), shapes
     return 'same BEV shape; ' + '; '.join(info)
@@ -135,7 +136,7 @@ check('torch + CUDA on GPU', torch_cuda)
 check('spconv sparse conv on GPU', spconv_conv)
 check('OpenPCDet CUDA ops', pcdet_ops)
 check('torch_scatter on GPU', torch_scatter_gpu)
-check('middle stages A/B/C/D', middle_stages)
+check('middle stages A-D + hybrids', middle_stages)
 for name in ('numpy', 'numba', 'scipy', 'tensorboardX'):
     check(name, module(name))
 
