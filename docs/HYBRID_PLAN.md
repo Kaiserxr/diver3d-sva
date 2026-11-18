@@ -23,7 +23,7 @@ and on box fit. Convolution is good at local detail; attention gives scene-wide 
 | 0 | `centerpoint_sparseconv_lr5e-4`, `_lr2e-3`, `_ep12` | Tune Run A: LR 5e-4 and 2e-3 at 20 epochs; 12 epochs at LR 1e-3 (Run A = LR 1e-3, 20 epochs). Budget: 4 runs; the hybrids get the same budget once a position encoding is chosen | ready |
 | 1 | `hybrid_global_rope`, `hybrid_global_cpe` | **Hybrid-global** (LitePT recipe): Run A's sparse conv unchanged, then 2 global self-attention layers over all voxels of a frame (~1,500-2,000) before the BEV map. Position encoding: 3D rotary (`rope`, no parameters) or a SubM 3x3x3 conv before each layer (`cpe`) | ready |
 | 2 | `centerpoint_sparseconv_rf` | **Control-RF**: Run A plus 2 SubM (1,5,5) layers at exactly the place where the hybrids have attention: larger receptive field, no attention. 0.88M parameters, within 20% of both hybrids (RoPE 0.78M, CPE 1.01M; Run A 0.68M) | ready |
-| F | `fshnet_diver3d` | **FSHNet** (CVPR 2025) as a whole detector, ported to Diver3D: a newer hybrid as a reference point (not a middle-stage-only comparison) | porting |
+| F | `fshnet_diver3d` | **FSHNet** (CVPR 2025) as a whole detector, ported to Diver3D: a newer hybrid as a reference point (not a middle-stage-only comparison) | ported; CPU-tested, first GPU run = its sanity check in the queue |
 | 3-5 | (later) | FSHNet's SlotFormer as a middle stage; SphereFormer radial windows; ConDaFormer block | later |
 
 ### Hybrid-global details (`SonarHybridMiddle`, `voxel_global_attention.py`)
@@ -38,6 +38,27 @@ and on box fit. Convolution is good at local detail; attention gives scene-wide 
   tall here); base 100. Scores depend only on relative voxel offsets (tested).
 - spconv has no depthwise conv, so `cpe` uses a full SubM 3x3x3 conv (+ linear + LayerNorm), as in
   PTv3 (~110k parameters per layer).
+
+### FSHNet port (`overlay/pcdet/models/fshnet`, config `fshnet_diver3d.yaml`)
+
+Ported from [github.com/Say2L/FSHNet](https://github.com/Say2L/FSHNet) (commit 8e8f23e, Apache-2.0)
+using its Waymo model (`FSHNet_base` + `SparseDynamicHead`), which has all three parts of the paper:
+SlotFormer (linear attention in scene-wide strips), sparse upsampling, and dynamic sparse label
+assignment; plus adaptive feature diffusion with its own foreground loss (added by
+`FSHNetCenterPoint`, a CenterPoint subclass, so OpenPCDet's files are untouched).
+
+- Same data pipeline and training schedule as Run A (20 epochs, LR 1e-3, batch 4); FSHNet's own
+  model settings (128 channels, WIN_SIZE 12, loc weight 3, IoU score rectification); same score
+  threshold (0.3), range and NMS (0.1) as all runs. It is a reference point, not a middle-stage-only
+  comparison: head, label assignment and losses differ from Runs A-D.
+- Changes (each documented in the file headers): SlotFormer's Triton kernels replaced by plain
+  PyTorch (same maths, tested to 2e-7); column-pooling height computed from the real grid (the
+  original's `height // 4` only fits 41-cell grids); pooled columns matched to their voxels
+  explicitly; one spconv indice_key prefix per SlotFormer stage; feature-map size passed as (x, y)
+  (the original mixed (y, x) and (x, y), harmless only on square grids); empty frames handled in
+  target assignment and decoding; class names read from the config.
+- Not tested on the GPU yet: the queue's sanity check (105 frames) is its first GPU run, and its
+  3 real runs are skipped if that fails.
 
 Deviations from the original plan: AP3D is reported at IoU 0.35 (challenge default) and 0.50, not
 0.25 (the official scorer has no 0.25); the control uses larger kernels, not an extra downsampling

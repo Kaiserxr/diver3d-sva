@@ -1,0 +1,120 @@
+# FSHNet (CVPR 2025) as a whole detector on Diver3D: a newer fully sparse hybrid, as a reference
+# point (it differs from Run A in more than the middle stage: own head, label assignment, losses).
+# Data pipeline and training schedule are identical to centerpoint_sparseconv.yaml (Run A).
+# Code: overlay/pcdet/models/fshnet (ported from github.com/Say2L/FSHNet, Apache-2.0).
+
+CLASS_NAMES: ['Diver']
+
+DATA_CONFIG:
+    _BASE_CONFIG_: cfgs/dataset_configs/diver3d_dataset.yaml
+    DATA_PROCESSOR:
+        - NAME: mask_points_and_boxes_outside_range
+          REMOVE_OUTSIDE_BOXES: True
+
+        - NAME: shuffle_points
+          SHUFFLE_ENABLED: {
+            'train': True,
+            'test': False
+          }
+
+        # voxels are built on the GPU by DynamicVoxelVFE; this only sets the grid:
+        # 0.1 x 0.1 x 0.5 m over [0,12] x [-5,5] x [-2.5,2.5] m -> 120 x 100 x 10 (paper)
+        - NAME: transform_points_to_voxels_placeholder
+          VOXEL_SIZE: [0.1, 0.1, 0.5]
+
+MODEL:
+    NAME: FSHNetCenterPoint            # OpenPCDet CenterPoint + FSHNet's backbone loss (overlay/pcdet/models/fshnet)
+
+    VFE:
+        NAME: DynamicVoxelVFE          # same encoder type as all runs; 64 ch as in FSHNet
+        WITH_DISTANCE: False
+        USE_ABSLOTE_XYZ: True
+        USE_NORM: True
+        NUM_FILTERS: [64, 64]
+
+    BACKBONE_3D:                       # FSHNet_base (Waymo model) adapted to the 120 x 100 x 10 grid
+        NAME: FSHNetDiver3D
+        CLASS_NAMES: ['Diver']
+        FEATURE_DIM: 128
+        WIN_SIZE: 12                   # slot width in cells: 1.2 m at stage 1, 2.4 m at stage 2
+
+        AFD_FEATURE_DIM: 128
+        AFD_NUM_LAYERS: 1
+        AFD_NUM_SBB: [8, 4, 4]
+        AFD_DOWN_STRIDE: [1, 2, 2]
+        AFD_DOWN_KERNEL_SIZE: [3, 3, 3]
+
+        AFD: True
+        FG_THRESHOLD: 0.4
+        FEATMAP_STRIDE: 2              # AFD runs on 0.2 m cells
+        DETACH_FEATURE: True
+        GREOUP_POOLING_KERNEL_SIZE: [9, 3]   # diver (~1.8 m at 0.2 m cells), background (as FSHNet)
+        GROUP_CLASS_NAMES: [['Diver']]
+
+    DENSE_HEAD:
+        NAME: SparseDynamicHead        # FSHNet's sparse head with dynamic label assignment
+        CLASS_AGNOSTIC: False
+        CLASS_NAMES_EACH_HEAD: [['Diver']]
+        INPUT_FEATURES: 128
+        USE_BIAS_BEFORE_NORM: False
+        NUM_HM_CONV: 2
+        BN_EPS: 0.001
+        BN_MOM: 0.01
+        R_FACTOR: 0.5
+        DYNAMIC_POS_NUM: 5
+        DCLA_REG_WEIGHT: 3
+        SEPARATE_HEAD_CFG:
+            HEAD_ORDER: ['bbox']       # (dx, dy, z, log l, log w, log h, cos, sin)
+            HEAD_DICT: {
+                'bbox': {'out_channels': 8, 'num_conv': 2},
+                'iou': {'out_channels': 1, 'num_conv': 2},
+            }
+
+        TARGET_ASSIGNER_CONFIG:
+            FEATURE_MAP_STRIDE: 1      # after FSHNet's sparse upsampling: 0.1 m cells
+            NUM_MAX_OBJS: 100
+
+        LOSS_CONFIG:
+            LOSS_WEIGHTS: {
+                'cls_weight': 1.0,
+                'loc_weight': 3.0,     # FSHNet's
+            }
+
+        POST_PROCESSING:               # same score threshold, range and NMS as all runs
+            SCORE_THRESH: 0.3
+            POST_CENTER_LIMIT_RANGE: [-1.0, -6.0, -3.5, 13.0, 6.0, 3.5]
+            MAX_OBJ_PER_SAMPLE: 500
+            USE_IOU_TO_RECTIFY_SCORE: True
+            IOU_RECTIFIER: [0.68]      # FSHNet's (vehicle) value
+            NMS_CONFIG:
+                NMS_TYPE: nms_gpu
+                NMS_THRESH: 0.1
+                NMS_PRE_MAXSIZE: 4096
+                NMS_POST_MAXSIZE: 100
+
+    POST_PROCESSING:
+        RECALL_THRESH_LIST: [0.3, 0.5, 0.7]
+        EVAL_METRIC: diver3d
+
+
+# paper: AdamW, peak LR 1e-3, weight decay 1e-2, grad clip 35, batch 4, 20 epochs, FP32
+OPTIMIZATION:
+    BATCH_SIZE_PER_GPU: 4
+    NUM_EPOCHS: 20
+
+    OPTIMIZER: adam_onecycle
+    LR: 0.001
+    WEIGHT_DECAY: 0.01
+    MOMENTUM: 0.9
+
+    MOMS: [0.95, 0.85]
+    PCT_START: 0.4
+    DIV_FACTOR: 10
+    DECAY_STEP_LIST: [35, 45]
+    LR_DECAY: 0.1
+    LR_CLIP: 0.0000001
+
+    LR_WARMUP: False
+    WARMUP_EPOCH: 1
+
+    GRAD_NORM_CLIP: 35
