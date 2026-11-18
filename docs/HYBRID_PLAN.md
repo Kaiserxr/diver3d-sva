@@ -22,8 +22,9 @@ and on box fit. Convolution is good at local detail; attention gives scene-wide 
 |---|---|---|---|
 | 0 | `centerpoint_sparseconv_lr5e-4`, `_lr2e-3`, `_ep12` | Tune Run A: LR 5e-4 and 2e-3 at 20 epochs; 12 epochs at LR 1e-3 (Run A = LR 1e-3, 20 epochs). Budget: 4 runs; the hybrids get the same budget once a position encoding is chosen | ready |
 | 1 | `hybrid_global_rope`, `hybrid_global_cpe` | **Hybrid-global** (LitePT recipe): Run A's sparse conv unchanged, then 2 global self-attention layers over all voxels of a frame (~1,500-2,000) before the BEV map. Position encoding: 3D rotary (`rope`, no parameters) or a SubM 3x3x3 conv before each layer (`cpe`) | ready |
-| 2 | (next) | **Control-RF**: Run A with larger kernels in the last stage, no attention, parameter count within 20% of the hybrid | to do |
-| 3-5 | (later) | FSHNet components (SlotFormer, sparse upsampling, label assignment); SphereFormer radial windows; ConDaFormer block | later |
+| 2 | `centerpoint_sparseconv_rf` | **Control-RF**: Run A plus 2 SubM (1,5,5) layers at exactly the place where the hybrids have attention: larger receptive field, no attention. 0.88M parameters, within 20% of both hybrids (RoPE 0.78M, CPE 1.01M; Run A 0.68M) | ready |
+| F | `fshnet_diver3d` | **FSHNet** (CVPR 2025) as a whole detector, ported to Diver3D: a newer hybrid as a reference point (not a middle-stage-only comparison) | porting |
+| 3-5 | (later) | FSHNet's SlotFormer as a middle stage; SphereFormer radial windows; ConDaFormer block | later |
 
 ### Hybrid-global details (`SonarHybridMiddle`, `voxel_global_attention.py`)
 
@@ -56,11 +57,28 @@ Sanity check first (each must memorise 105 frames, a few minutes each):
 for c in hybrid_global_rope hybrid_global_cpe; do RESUME=1 KEEP_CKPTS="last" bash scripts/train.sh ${c}_overfit sanity --num_epochs_to_eval 5 --max_ckpt_save_num 5; done
 ```
 
-Then the overnight queue (in tmux; rerun-safe):
+Then everything else runs from one queue (in tmux; rerun-safe):
 
 ```bash
-bash scripts/queue_hybrid_exp.sh
+bash scripts/queue_until_presentation.sh
 ```
+
+Order: tuning (3 runs) -> hybrids RoPE + CPE x 3 seeds -> Control-RF (sanity check, then 3 seeds)
+-> Run A third seed -> FSHNet (the queue runs `git pull` + setup first; if `fshnet_diver3d.yaml`
+exists: sanity check, then 3 seeds; otherwise skipped) -> third seed for B, C, D -> FSHNet again if
+it was skipped. A sanity check must reach APBEV@0.35 >= 0.8 on its 105 frames, otherwise that
+model's runs are skipped. Note the queue pulls new code from GitHub unattended at the FSHNet step.
+
+Progress and results, at any time (rewritten after every run):
+
+```bash
+cat ~/projects/diver3d-sva/logs/REPORT.md
+```
+
+`scripts/report.py` writes it: queue state per run (done / running with time left / interrupted /
+FAILED / pending), free disk, per-model mean+-std over seeds (epochs 6-12 average: AP3D@0.35 and
+@0.50, SDS, < 2 m vs >= 2 m, centre vs off-centre, recall, precision, hours per run, difference
+to Run A and whether it exceeds the seed spread), and per-run numbers.
 
 ### Disk space
 
