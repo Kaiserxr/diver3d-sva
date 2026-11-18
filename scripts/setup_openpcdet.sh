@@ -9,7 +9,7 @@
 #   2. Links our files (overlay/) into it. They are *links*, not copies, so an edit
 #      on either side is the same file and git sees it in this repo.
 #   3. Registers our classes in OpenPCDet's lists: Diver3DDataset (dataset);
-#      SonarSparseMiddle, PTv3Backbone, SSTBackbone (3D middle stages);
+#      SonarSparseMiddle, SonarHybridMiddle, PTv3Backbone, SSTBackbone (3D middle stages);
 #      VoxelColumnMaxScatter (voxels -> BEV). Also makes the unused
 #      Argoverse 2 loader optional (it would otherwise require av2 + kornia).
 #      Also lets tools/train.py read its random seed from $PCDET_SEED (default 666).
@@ -54,6 +54,8 @@ link() {   # link <path relative to overlay/ and to OpenPCDet/>
 }
 link pcdet/datasets/diver3d
 link pcdet/models/backbones_3d/sonar_sparse_middle.py
+link pcdet/models/backbones_3d/sonar_hybrid_middle.py
+link pcdet/models/backbones_3d/voxel_global_attention.py
 link pcdet/models/backbones_3d/ptv3_backbone.py
 link pcdet/models/backbones_3d/ptv3
 link pcdet/models/backbones_3d/sst_backbone.py
@@ -105,9 +107,10 @@ open(p, 'w', encoding='utf-8').write(s)
 EOF
 }
 register backbones_3d/__init__.py \
-    sonar_sparse_middle:SonarSparseMiddle ptv3_backbone:PTv3Backbone sst_backbone:SSTBackbone
+    sonar_sparse_middle:SonarSparseMiddle sonar_hybrid_middle:SonarHybridMiddle \
+    ptv3_backbone:PTv3Backbone sst_backbone:SSTBackbone
 register backbones_2d/map_to_bev/__init__.py voxel_column_max:VoxelColumnMaxScatter
-echo "[3/5] registered: Diver3DDataset, SonarSparseMiddle, PTv3Backbone, SSTBackbone, VoxelColumnMaxScatter"
+echo "[3/5] registered: Diver3DDataset, SonarSparseMiddle, SonarHybridMiddle, PTv3Backbone, SSTBackbone, VoxelColumnMaxScatter"
 
 # 3b. let train.py take the seed from $PCDET_SEED (default 666, OpenPCDet's fixed value),
 #     so the same experiment can be repeated with a second seed

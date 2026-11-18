@@ -1,0 +1,78 @@
+# Hybrid CNN + attention middle stages (experiments 0-2)
+
+## Question
+
+Does adding attention to the sparse-conv middle stage (Run A) improve diver detection, beyond what a
+larger receptive field alone gives? Motivation: Run A beat DSVT, PTv3 and SST (all untuned, from
+scratch), and all models fail in the same places: within 2 m of the sonar, off-centre in the beam,
+and on box fit. Convolution is good at local detail; attention gives scene-wide context.
+
+## Rules (same as docs/DSVT_PLAN.md)
+
+- Only the middle stage changes. VFE, BEV backbone, head, loss, augmentation, schedule and splits
+  stay identical. Every config is generated from `centerpoint_sparseconv.yaml` and differs only in
+  its marked middle-stage block (experiments 1-2) or in one marked optimisation line (experiment 0).
+- Every middle stage hands the same sparse tensor to `HeightCompression`, so the BEV map is
+  identical: 128 channels at 100 x 120 (checked by `scripts/check_gpu_stack.py`).
+- 3 seeds per model (666, 1234, 2024).
+
+## Experiments
+
+| # | Config | What | Status |
+|---|---|---|---|
+| 0 | `centerpoint_sparseconv_lr5e-4`, `_lr2e-3`, `_ep12` | Tune Run A: LR 5e-4 and 2e-3 at 20 epochs; 12 epochs at LR 1e-3 (Run A = LR 1e-3, 20 epochs). Budget: 4 runs; the hybrids get the same budget once a position encoding is chosen | ready |
+| 1 | `hybrid_global_rope`, `hybrid_global_cpe` | **Hybrid-global** (LitePT recipe): Run A's sparse conv unchanged, then 2 global self-attention layers over all voxels of a frame (~1,500-2,000) before the BEV map. Position encoding: 3D rotary (`rope`, no parameters) or a SubM 3x3x3 conv before each layer (`cpe`) | ready |
+| 2 | (next) | **Control-RF**: Run A with larger kernels in the last stage, no attention, parameter count within 20% of the hybrid | to do |
+| 3-5 | (later) | FSHNet components (SlotFormer, sparse upsampling, label assignment); SphereFormer radial windows; ConDaFormer block | later |
+
+### Hybrid-global details (`SonarHybridMiddle`, `voxel_global_attention.py`)
+
+- Attention runs after Run A's last height-downsampling layer (64 channels, height 2). Our network
+  never downsamples x/y, so this is the stage with the fewest voxels, and full attention is cheap.
+- Pre-norm transformer layers: 4 heads, FFN 256, no dropout. Frames are padded and masked, so
+  attention never crosses frames (tested: batched = per-frame to ~1e-6).
+- Output projections (and the CPE branch) start at zero: at initialisation the hybrid computes
+  exactly Run A, and attention is learned on top. This keeps the start of training identical.
+- RoPE: rotation pairs per head shared out over x, y and z (z gets a quarter; it is only 2 cells
+  tall here); base 100. Scores depend only on relative voxel offsets (tested).
+- spconv has no depthwise conv, so `cpe` uses a full SubM 3x3x3 conv (+ linear + LayerNorm), as in
+  PTv3 (~110k parameters per layer).
+
+Deviations from the original plan: AP3D is reported at IoU 0.35 (challenge default) and 0.50, not
+0.25 (the official scorer has no 0.25); the control uses larger kernels, not an extra downsampling
+stage, which would change the BEV shape.
+
+## How to run (lab PC)
+
+```bash
+cd ~/projects/diver3d-sva && git pull && conda activate sva
+bash scripts/setup_openpcdet.sh ~/data/diver3d_v2          # registers SonarHybridMiddle
+python scripts/check_gpu_stack.py                         # 'middle stages A-D + hybrids' must PASS
+```
+
+Sanity check first (each must memorise 105 frames, a few minutes each):
+
+```bash
+for c in hybrid_global_rope hybrid_global_cpe; do bash scripts/train.sh ${c}_overfit sanity --num_epochs_to_eval 5; done
+```
+
+Then the overnight queue (in tmux; rerun-safe):
+
+```bash
+bash scripts/queue_hybrid_exp.sh
+```
+
+## Evaluation (same scripts for every model)
+
+```bash
+python scripts/eval_by_range.py --epochs 6-12                 # overall + by distance
+python scripts/eval_by_range.py --epochs 6-12 --bins 0,2      # < 2 m vs >= 2 m
+python scripts/eval_by_range.py --epochs 6-12 --by angle      # centre (< 15 deg) vs off-centre
+python scripts/failure_stats.py --epochs 6-12                 # false alarms: real divers vs background
+bash scripts/rescore_threshold.sh 0.1 10                      # also at score cut-off 0.1
+```
+
+Reported per model: AP3D@0.35, AP3D@0.50, SDS (mean +- std over 3 seeds, epochs 6-12 average),
+the range / angle splits, the false-alarm breakdown, parameter count (from `check_gpu_stack.py`)
+and training time per epoch (from the logs). A difference counts only if it is larger than the
+spread between seeds.
