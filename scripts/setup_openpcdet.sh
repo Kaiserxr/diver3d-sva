@@ -59,7 +59,9 @@ link pcdet/models/backbones_3d/voxel_global_attention.py
 link pcdet/models/backbones_3d/ptv3_backbone.py
 link pcdet/models/backbones_3d/ptv3
 link pcdet/models/backbones_3d/sst_backbone.py
+link pcdet/models/backbones_3d/dense_mixer_middle.py
 link pcdet/models/backbones_2d/map_to_bev/voxel_column_max.py
+link pcdet/models/backbones_2d/map_to_bev/dense_bev_passthrough.py
 link pcdet/models/fshnet
 link tools/cfgs/dataset_configs/diver3d_dataset.yaml
 link tools/cfgs/diver3d_models
@@ -111,12 +113,15 @@ register backbones_3d/__init__.py \
     sonar_sparse_middle:SonarSparseMiddle sonar_hybrid_middle:SonarHybridMiddle \
     ptv3_backbone:PTv3Backbone sst_backbone:SSTBackbone
 register backbones_2d/map_to_bev/__init__.py voxel_column_max:VoxelColumnMaxScatter
+# dense middle stages (docs/DENSE_PLAN.md)
+register backbones_3d/__init__.py dense_mixer_middle:DenseMixerMiddle
+register backbones_2d/map_to_bev/__init__.py dense_bev_passthrough:DenseBEVPassthrough
 # FSHNet port (overlay/pcdet/models/fshnet): ".fshnet.lazy" -> "from ..fshnet.lazy import". These
 # factories import FSHNet's code only when an FSHNet model is built, so it cannot break other models.
 register backbones_3d/__init__.py .fshnet.lazy:FSHNetDiver3D
 register dense_heads/__init__.py .fshnet.lazy:SparseDynamicHead
 register detectors/__init__.py .fshnet.lazy:FSHNetCenterPoint
-echo "[3/5] registered: Diver3DDataset, SonarSparseMiddle, SonarHybridMiddle, PTv3Backbone, SSTBackbone, VoxelColumnMaxScatter, FSHNet (FSHNetDiver3D, SparseDynamicHead, FSHNetCenterPoint)"
+echo "[3/5] registered: Diver3DDataset, SonarSparseMiddle, SonarHybridMiddle, PTv3Backbone, SSTBackbone, VoxelColumnMaxScatter, DenseMixerMiddle, DenseBEVPassthrough, FSHNet (FSHNetDiver3D, SparseDynamicHead, FSHNetCenterPoint)"
 
 # 3b. let train.py take the seed from $PCDET_SEED (default 666, OpenPCDet's fixed value),
 #     so the same experiment can be repeated with a second seed
