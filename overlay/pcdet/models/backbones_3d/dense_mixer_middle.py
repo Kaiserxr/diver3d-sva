@@ -39,6 +39,9 @@ Config keys: MIXER, DIM (64), DEPTHS ([2, 2]), MLP_RATIO (4), NHEAD (4), ATTN_LA
              BF16 (False): run this middle stage in bfloat16 autocast (~2x faster on the dense grid;
              norms, softmax and the low-resolution global attention stay float32). The rest of the
              detector is unchanged (float32).
+             COMPILE (False): torch.compile the middle stage on the GPU (fuses the 27-neighbour loop
+             of 'na' and the norm / activation passes into fewer kernels). Same maths, only faster.
+             If compiling fails, it falls back to the normal code and logs a warning.
 """
 import itertools
 import math
@@ -241,6 +244,8 @@ class DenseMixerMiddle(nn.Module):
         assert self.mixer in ('identity', 'conv', 'na', 'hybrid', 'densea'), self.mixer
         self.attn_off = bool(c.get('ATTN_OFF', False))
         self.bf16 = bool(c.get('BF16', False))
+        self.compile = bool(c.get('COMPILE', False))
+        self._compiled = None
         if self.mixer == 'densea':
             c1, c2 = c.get('NUM_FILTERS', [64, 64])
             self.net = DenseRunA(input_channels, c1, c2, c.get('NUM_SUBM', 2))
@@ -266,11 +271,24 @@ class DenseMixerMiddle(nn.Module):
         x = to_dense(batch_dict['voxel_features'], batch_dict['voxel_coords'], batch_dict['batch_size'], self.shape)
         on = self.bf16 and x.is_cuda
         with torch.autocast('cuda', dtype=torch.bfloat16, enabled=on):
-            x = self._body(x)
+            x = self._run_body(x)
         B, C, Z, Y, X = x.shape
         batch_dict['spatial_features'] = x.float().reshape(B, C * Z, Y, X)   # same folding as HeightCompression
         batch_dict['spatial_features_stride'] = 1
         return batch_dict
+
+    def _run_body(self, x):
+        if not (self.compile and x.is_cuda):
+            return self._body(x)
+        if self._compiled is None:
+            self._compiled = torch.compile(self._body)
+        try:
+            return self._compiled(x)
+        except Exception as e:                                     # e.g. no Triton for this GPU
+            import logging
+            logging.getLogger(__name__).warning(f'DenseMixerMiddle: torch.compile failed ({e}); running uncompiled')
+            self.compile = False
+            return self._body(x)
 
     def _body(self, x):
         if self.mixer == 'densea':

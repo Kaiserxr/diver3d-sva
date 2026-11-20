@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Time one training step of each dense middle stage on the GPU, float32 vs bfloat16 (2-3 minutes).
+"""Time one training step of each dense middle stage on the GPU: fp32, bf16, bf16 + torch.compile
+(~5-10 minutes; compiling takes a minute or two per model).
 
-    conda activate sva && python scripts/bench_dense.py
+    conda activate sva && python scripts/bench_dense.py [model ...]     (default: all 5 base models)
 
 Builds each DenseMixerMiddle variant from its real config, feeds a batch of 4 random frames
 (~1,700 occupied voxels each, like Diver3D), and times forward + backward of the middle stage only.
@@ -53,22 +54,22 @@ def main():
     torch.backends.cudnn.benchmark = True
     old = os.getcwd(); os.chdir(TOOLS)
     try:
-        cfgs = {n: cfg_from_yaml_file(f'cfgs/diver3d_models/{n}.yaml', EasyDict()) for n in NAMES}
+        cfgs = {n: cfg_from_yaml_file(f'cfgs/diver3d_models/{n}.yaml', EasyDict()) for n in (sys.argv[1:] or NAMES)}
     finally:
         os.chdir(old)
     feats, coords, bs = batch()
-    print(f'{"model":16}{"fp32 ms":>10}{"bf16 ms":>10}{"speed-up":>10}  bf16 finite   peak GB (bf16)')
+    print(f'{"model":16}{"fp32 ms":>10}{"bf16 ms":>10}{"bf16+compile":>14}{"speed-up":>10}  finite   peak GB (bf16)')
     for name, c in cfgs.items():
         row = []
-        for bf16 in (False, True):
-            mc = EasyDict(dict(c.MODEL.BACKBONE_3D)); mc.BF16 = bf16
+        for bf16, comp in ((False, False), (True, False), (True, True)):
+            mc = EasyDict(dict(c.MODEL.BACKBONE_3D)); mc.BF16 = bf16; mc.COMPILE = comp
             m = backbones_3d[mc.NAME](model_cfg=mc, input_channels=128, grid_size=GRID).cuda().train()
             torch.cuda.reset_peak_memory_stats()
             ms, ok = step_ms(m, feats, coords, bs)
             row.append((ms, ok, torch.cuda.max_memory_allocated() / 1e9))
             del m; torch.cuda.empty_cache()
-        (a, _, _), (b, ok, gb) = row
-        print(f'{name:16}{a:10.0f}{b:10.0f}{a / b:9.1f}x  {str(ok):12} {gb:6.1f}')
+        (a, _, _), (b, ok, gb), (cc, ok2, _) = row
+        print(f'{name:16}{a:10.0f}{b:10.0f}{cc:14.0f}{a / min(b, cc):9.1f}x  {str(ok and ok2):8} {gb:6.1f}', flush=True)
     print('\nOne training epoch is 5,216 steps; a run trained to epoch 12 is ~62,600 steps.')
 
 
