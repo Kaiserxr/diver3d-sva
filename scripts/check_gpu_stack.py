@@ -93,7 +93,9 @@ def middle_stages():
     try:
         cfgs = {n: cfg_from_yaml_file(f'cfgs/diver3d_models/{n}.yaml', EasyDict())
                 for n in ('centerpoint_sparseconv', 'dsvt_voxel', 'ptv3_voxel', 'sst_voxel',
-                          'hybrid_global_cpe', 'hybrid_global_rope', 'centerpoint_sparseconv_rf')}
+                          'hybrid_global_cpe', 'hybrid_global_rope', 'centerpoint_sparseconv_rf',
+                          'dense_identity', 'dense_conv', 'dense_na', 'dense_hybrid', 'dense_densea',
+                          'dense_na_lsa', 'dense_hybrid_lsa')}
     finally:
         os.chdir(old)
 
@@ -136,7 +138,7 @@ check('torch + CUDA on GPU', torch_cuda)
 check('spconv sparse conv on GPU', spconv_conv)
 check('OpenPCDet CUDA ops', pcdet_ops)
 check('torch_scatter on GPU', torch_scatter_gpu)
-check('middle stages A-D + hybrids', middle_stages)
+check('middle stages A-D + hybrids + dense', middle_stages)
 for name in ('numpy', 'numba', 'scipy', 'tensorboardX'):
     check(name, module(name))
 

@@ -49,6 +49,15 @@ LABELS = {
     'hybrid_global_cpe': 'Hybrid CPE (exp 1)',
     'dsvt_voxel': 'B DSVT', 'ptv3_voxel': 'C PTv3', 'sst_voxel': 'D SST',
     'fshnet_diver3d': 'FSHNet (CVPR 2025)',
+    'dense_densea': 'Dense Run A (dense conv 3^3)',
+    'dense_identity': 'Dense: identity (floor)',
+    'dense_conv': 'Dense: conv mixer',
+    'dense_na': 'Dense: neighborhood attention',
+    'dense_hybrid': 'Dense: conv + global attention',
+    'dense_na_lsa': 'Dense: NA + LSA',
+    'dense_hybrid_lsa': 'Dense: hybrid + LSA',
+    'dense_na_lr5e-4': 'Dense: NA, LR 5e-4', 'dense_na_lr2e-3': 'Dense: NA, LR 2e-3',
+    'dense_hybrid_lr5e-4': 'Dense: hybrid, LR 5e-4', 'dense_hybrid_lr2e-3': 'Dense: hybrid, LR 2e-3',
 }
 BASE = 'centerpoint_sparseconv'
 
@@ -178,6 +187,8 @@ def main():
     if OUT_ROOT.is_dir():
         for cfg_dir in sorted(p for p in OUT_ROOT.iterdir() if p.is_dir() and not p.name.endswith('_overfit')):
             for run_dir in sorted(p for p in cfg_dir.iterdir() if re.match(r'^run[A-Z]_s\d+$', p.name)):
+                if cfg_dir.name.startswith('dense_') and run_dir.name.startswith('runE_'):
+                    continue    # first dense runs (fp32, 20 epochs): superseded by runG (bf16, stop at 12)
                 if run_dir.joinpath('FINISHED').is_file() or list(run_dir.glob('eval/eval_with_train/epoch_*/*/final_result/data/*.json')):
                     runs.append((cfg_dir.name, run_dir.name))
     jobs, index = [], []
@@ -241,9 +252,53 @@ def main():
     parts += ['```', table(['run', 'epochs', 'AP3D@0.35', 'AP3D@0.50', 'SDS', 'near', 'off', 'hours'], rows)
               if rows else '(none)', '```', '']
 
+    if plot_curves(runs):
+        parts += ['Loss / val curves of the dense runs (Run A for reference): logs/dense_curves.png', '']
     text = '\n'.join(parts)
     Path(args.out).write_text(text, encoding='utf-8')
     print(text)
+
+
+def log_curves(cfg, tag):
+    """Per-epoch train loss (OpenPCDet's running epoch mean at the epoch's last log line) and the
+    per-epoch val AP3D@0.35 printed after each epoch's evaluation, read from the run's console logs."""
+    loss, ap = {}, []
+    for f in run_logs(cfg, tag):
+        txt = f.read_text(errors='replace')
+        for ep, avg in re.findall(r'Train:\s+(\d+)/\d+.*?Loss: [\d.e+-]+ \(([\d.e+-]+)\)', txt):
+            loss[int(ep)] = float(avg)
+        ap += [float(v) for v in re.findall(r'^\s+AP3D@0\.35\s+([\d.]+)', txt, re.M)]
+    return loss, ap
+
+
+def plot_curves(runs):
+    """logs/dense_curves.png: train loss and val AP3D@0.35 per epoch for every dense run + Run A."""
+    sel = [(c, t) for c, t in runs if c.startswith('dense_') or c == BASE]
+    if not any(c.startswith('dense_') for c, _ in sel):
+        return False
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return False
+    fig, ax = plt.subplots(1, 2, figsize=(13, 4.5))
+    cmap = plt.get_cmap('tab10')
+    cfgs = sorted({c for c, _ in sel})
+    for c, t in sorted(sel):
+        loss, ap = log_curves(c, t)
+        kw = dict(color=cmap(cfgs.index(c) % 10), lw=1.3, alpha=0.85)
+        if loss:
+            ax[0].plot(sorted(loss), [loss[e] for e in sorted(loss)], label=f'{LABELS.get(c, c)} [{t}]', **kw)
+        if ap:
+            ax[1].plot(range(1, len(ap) + 1), ap, **kw)
+    for a, title in zip(ax, ['Train loss (epoch mean)', 'Val AP3D@0.35']):
+        a.set_title(title); a.set_xlabel('epoch'); a.grid(alpha=0.3)
+    ax[0].legend(fontsize=6)
+    fig.tight_layout()
+    fig.savefig(LOGS / 'dense_curves.png', dpi=130)
+    plt.close(fig)
+    return True
 
 
 if __name__ == '__main__':

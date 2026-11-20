@@ -59,7 +59,9 @@ link pcdet/models/backbones_3d/voxel_global_attention.py
 link pcdet/models/backbones_3d/ptv3_backbone.py
 link pcdet/models/backbones_3d/ptv3
 link pcdet/models/backbones_3d/sst_backbone.py
+link pcdet/models/backbones_3d/dense_mixer_middle.py
 link pcdet/models/backbones_2d/map_to_bev/voxel_column_max.py
+link pcdet/models/backbones_2d/map_to_bev/dense_bev_passthrough.py
 link pcdet/models/fshnet
 link tools/cfgs/dataset_configs/diver3d_dataset.yaml
 link tools/cfgs/diver3d_models
@@ -111,12 +113,15 @@ register backbones_3d/__init__.py \
     sonar_sparse_middle:SonarSparseMiddle sonar_hybrid_middle:SonarHybridMiddle \
     ptv3_backbone:PTv3Backbone sst_backbone:SSTBackbone
 register backbones_2d/map_to_bev/__init__.py voxel_column_max:VoxelColumnMaxScatter
+# dense middle stages (docs/DENSE_PLAN.md)
+register backbones_3d/__init__.py dense_mixer_middle:DenseMixerMiddle
+register backbones_2d/map_to_bev/__init__.py dense_bev_passthrough:DenseBEVPassthrough
 # FSHNet port (overlay/pcdet/models/fshnet): ".fshnet.lazy" -> "from ..fshnet.lazy import". These
 # factories import FSHNet's code only when an FSHNet model is built, so it cannot break other models.
 register backbones_3d/__init__.py .fshnet.lazy:FSHNetDiver3D
 register dense_heads/__init__.py .fshnet.lazy:SparseDynamicHead
 register detectors/__init__.py .fshnet.lazy:FSHNetCenterPoint
-echo "[3/5] registered: Diver3DDataset, SonarSparseMiddle, SonarHybridMiddle, PTv3Backbone, SSTBackbone, VoxelColumnMaxScatter, FSHNet (FSHNetDiver3D, SparseDynamicHead, FSHNetCenterPoint)"
+echo "[3/5] registered: Diver3DDataset, SonarSparseMiddle, SonarHybridMiddle, PTv3Backbone, SSTBackbone, VoxelColumnMaxScatter, DenseMixerMiddle, DenseBEVPassthrough, FSHNet (FSHNetDiver3D, SparseDynamicHead, FSHNetCenterPoint)"
 
 # 3b. let train.py take the seed from $PCDET_SEED (default 666, OpenPCDet's fixed value),
 #     so the same experiment can be repeated with a second seed
@@ -156,6 +161,23 @@ sed -i 's/map_location=loc_type)/map_location=loc_type, weights_only=False)/' "$
    $(grep -c 'map_location=loc_type)' "$TEMPLATE_PY") -eq 0 ]] \
     || { echo "could not patch checkpoint loading: detector3d_template.py changed shape"; exit 1; }
 echo "[3d]  checkpoints load with weights_only=False (PyTorch 2.6+)"
+
+# 3e. optional early stop: with $PCDET_STOP_EPOCH=N, train.py trains only the first N epochs of the
+#     normal NUM_EPOCHS schedule (same learning-rate curve; it just stops). Epochs 1..N are then
+#     identical to a full run with the same seed. Unset = unchanged behaviour.
+python3 - "$PCDET/tools/train.py" <<'EOF'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+if 'PCDET_STOP_EPOCH' not in s:
+    old = "        total_epochs=args.epochs,\n        start_iter=it,"
+    if s.count(old) != 1:
+        sys.exit('could not patch the early stop: OpenPCDet tools/train.py changed shape')
+    s = s.replace(old, "        total_epochs=min(args.epochs, int(os.environ.get('PCDET_STOP_EPOCH', args.epochs))),\n"
+                       "        start_iter=it,")
+    open(p, 'w', encoding='utf-8').write(s)
+EOF
+echo "[3e]  train.py stops early if \$PCDET_STOP_EPOCH is set (same LR schedule)"
 
 # 4. numpy >= 1.24 compatibility (np.int32 / np.float32 are untouched)
 # (on a rerun nothing matches any more; grep then exits 1, which must not stop the script)

@@ -27,17 +27,16 @@ git -C "$APC" fetch -q origin
 git -C "$APC" checkout -q "$APC_COMMIT"
 echo "[1/3] APC_TDC at $(git -C "$APC" rev-parse --short HEAD)"
 
-# 2. conda env
-source "$(conda info --base)/etc/profile.d/conda.sh"
-if ! conda env list | awk '{print $1}' | grep -qx apc; then
-    conda create -y -q -n apc python=3.12
-    conda activate apc
-    pip install -q torch --index-url https://download.pytorch.org/whl/cu128
-    pip install -q "numpy>=2.0" "scipy>=1.13" matplotlib
-else
-    conda activate apc
-fi
-python - <<'EOF'
+# 2. conda env. Uses the env's own python by path ("conda activate" inside a script can silently
+#    leave the base env active), and installs whatever is missing, so a half-made env is repaired.
+CONDA_BASE="$(conda info --base)"
+PY="$CONDA_BASE/envs/apc/bin/python"
+[[ -x "$PY" ]] || conda create -y -q -n apc python=3.12
+"$PY" -c "import torch" 2>/dev/null \
+    || "$PY" -m pip install -q torch --index-url https://download.pytorch.org/whl/cu128
+"$PY" -c "import numpy, scipy, matplotlib; assert int(numpy.__version__.split('.')[0]) >= 2" 2>/dev/null \
+    || "$PY" -m pip install -q "numpy>=2.0" "scipy>=1.13" matplotlib
+"$PY" - <<'EOF'
 import torch, numpy, scipy
 print(f"[2/3] env apc: torch {torch.__version__}, CUDA ok: {torch.cuda.is_available()}, "
       f"GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'none'}, numpy {numpy.__version__}")
@@ -52,7 +51,7 @@ if [[ -f "$PROC/d3d_train.npz" && -f "$PROC/d3d_val.npz" ]]; then
     echo "[3/3] packed data already in $PROC"
 else
     echo "      free disk before packing: $(df -h "$PROC" | awk 'NR==2{print $4}')"
-    python "$APC/code/d3d/pack_data.py" "$DATA" "$PROC" --splits train,val
+    "$PY" "$APC/code/d3d/pack_data.py" "$DATA" "$PROC" --splits train,val
     echo "[3/3] packed data in $PROC"
 fi
 ls -lh "$PROC"
