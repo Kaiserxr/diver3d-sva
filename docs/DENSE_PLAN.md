@@ -49,7 +49,9 @@ run for dense Run A / identity, ~11 h for conv, and NA was on course for ~29 h (
   run with the same seed. The report averages epochs 6-12, so the protocol is unchanged.
 - **bf16 autocast in the dense middle stage** (`BF16: True` in the configs): norms, softmax and the
   hybrid's low-resolution attention stay fp32; the rest of the detector is fp32.
-- `scripts/bench_dense.py` times one step of each variant in fp32 and bf16 on the GPU and checks that
+- **torch.compile** (`COMPILE: True`): same maths; on the RTX 5080 it made NA ~8x faster (533 -> 67 ms per
+  step of the middle stage), conv and hybrid ~15-20%.
+- `scripts/bench_dense.py` times one step of each variant in fp32, bf16 and bf16 + compile and checks that
   bf16 stays finite.
 
 The runE runs are ignored by the report.

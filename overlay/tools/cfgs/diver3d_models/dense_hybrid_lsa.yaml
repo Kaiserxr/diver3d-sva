@@ -35,6 +35,7 @@ MODEL:
         NAME: DenseMixerMiddle         # every voxel is a token, empty ones too
         MIXER: hybrid
         BF16: True                     # middle stage in bfloat16 (speed); rest of the detector fp32
+        COMPILE: True                  # torch.compile the middle stage (same maths; NA ~8x faster)
         LSA: True
     MAP_TO_BEV:
         NAME: DenseBEVPassthrough      # the middle stage already folds 64 ch x 2 heights -> 128
