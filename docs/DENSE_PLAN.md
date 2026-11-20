@@ -38,6 +38,22 @@ checked against a brute-force loop. Caveat for reading the results: ~98.6% of th
 Same as every earlier run: AP3D@0.35 averaged over epochs 6-12, mean +- std over seeds 666 / 1234 /
 2024, val = every 4th frame, official scorer. Compared directly with Run A and DSVT / PTv3 / SST.
 
+## Speed (changed after the first runs)
+
+The first dense runs (tag runE: fp32, 20 epochs) were far slower than the sparse models: ~4 h per
+run for dense Run A / identity, ~11 h for conv, and NA was on course for ~29 h (every step processes
+120,000 voxels x 4 frames; sparse Run A processes ~1,700 per frame and took 0.5 h). From tag runG on:
+
+- **Stop after epoch 12** (`PCDET_STOP_EPOCH=12`, patch 3e in setup_openpcdet.sh): the learning-rate
+  schedule is still the 20-epoch one, training just stops, so epochs 1-12 are exactly those of a full
+  run with the same seed. The report averages epochs 6-12, so the protocol is unchanged.
+- **bf16 autocast in the dense middle stage** (`BF16: True` in the configs): norms, softmax and the
+  hybrid's low-resolution attention stay fp32; the rest of the detector is fp32.
+- `scripts/bench_dense.py` times one step of each variant in fp32 and bf16 on the GPU and checks that
+  bf16 stays finite.
+
+The runE runs are ignored by the report.
+
 ## How to run (lab PC)
 
 ```bash

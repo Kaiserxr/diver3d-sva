@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Primus test: does a trained dense attention model actually use its attention?
 #
-#   bash scripts/attn_off_test.sh            # epochs 10 and 20 of every dense_na* / dense_hybrid* run
+#   bash scripts/attn_off_test.sh            # epochs 10 and 12 of every dense_na* / dense_hybrid* run
 #   bash scripts/attn_off_test.sh "10"       # other epochs (only kept checkpoints: 10 and the last)
 #
 # Re-evaluates each checkpoint with MODEL.BACKBONE_3D.ATTN_OFF True: the trained weights are kept but
@@ -14,13 +14,13 @@
 # (from the training log) next to score without it. Finished checkpoints are skipped on a rerun.
 set -uo pipefail
 
-EPOCHS="${1:-10 20}"
+EPOCHS="${1:-10 12}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TOOLS="$REPO/third_party/OpenPCDet/tools"
 OUT="$REPO/third_party/OpenPCDet/output/diver3d_models"
 mkdir -p "$REPO/logs"
 
-for run_dir in "$OUT"/dense_na*/run[A-Z]_s* "$OUT"/dense_hybrid*/run[A-Z]_s*; do
+for run_dir in "$OUT"/dense_na*/runG_s* "$OUT"/dense_hybrid*/runG_s*; do
     [[ -d "$run_dir" ]] || continue
     cfg="$(basename "$(dirname "$run_dir")")"; tag="$(basename "$run_dir")"
     for e in $EPOCHS; do

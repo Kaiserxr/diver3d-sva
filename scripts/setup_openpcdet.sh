@@ -162,6 +162,23 @@ sed -i 's/map_location=loc_type)/map_location=loc_type, weights_only=False)/' "$
     || { echo "could not patch checkpoint loading: detector3d_template.py changed shape"; exit 1; }
 echo "[3d]  checkpoints load with weights_only=False (PyTorch 2.6+)"
 
+# 3e. optional early stop: with $PCDET_STOP_EPOCH=N, train.py trains only the first N epochs of the
+#     normal NUM_EPOCHS schedule (same learning-rate curve; it just stops). Epochs 1..N are then
+#     identical to a full run with the same seed. Unset = unchanged behaviour.
+python3 - "$PCDET/tools/train.py" <<'EOF'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+if 'PCDET_STOP_EPOCH' not in s:
+    old = "        total_epochs=args.epochs,\n        start_iter=it,"
+    if s.count(old) != 1:
+        sys.exit('could not patch the early stop: OpenPCDet tools/train.py changed shape')
+    s = s.replace(old, "        total_epochs=min(args.epochs, int(os.environ.get('PCDET_STOP_EPOCH', args.epochs))),\n"
+                       "        start_iter=it,")
+    open(p, 'w', encoding='utf-8').write(s)
+EOF
+echo "[3e]  train.py stops early if \$PCDET_STOP_EPOCH is set (same LR schedule)"
+
 # 4. numpy >= 1.24 compatibility (np.int32 / np.float32 are untouched)
 # (on a rerun nothing matches any more; grep then exits 1, which must not stop the script)
 { grep -rlE 'np\.(int|float)\b' "$PCDET/pcdet" --include='*.py' || true; } \

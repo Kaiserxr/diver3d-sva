@@ -8,8 +8,12 @@
 #                                          logs/dense_curves.png (train loss + val AP per epoch)
 # Rerun-safe: finished runs are skipped and an interrupted run continues from its last epoch.
 #
+# Every run trains epochs 1-12 of the usual 20-epoch schedule (PCDET_STOP_EPOCH=12: same learning-rate
+# curve, it just stops; the report averages epochs 6-12 anyway) with the middle stage in bf16 (configs:
+# BF16: True). Tag runG. The first dense runs (runE: fp32, 20 epochs) were too slow and are not used.
+#
 # Order:
-#   1. sanity checks (memorise 105 frames, APBEV@0.35 >= 0.8) for the 5 base variants
+#   1. sanity checks (memorise 105 frames, APBEV@0.35 >= 0.8) for the 5 base variants (passed: skipped)
 #   2. seed 666 of the 5 variants: dense Run A, identity, conv, neighborhood attention, hybrid
 #      (so a first comparison exists after ~1 day even if the rest is still running)
 #   3. seeds 1234 and 2024 of the same 5
@@ -27,7 +31,8 @@ report() { python scripts/report.py --data third_party/OpenPCDet/data/diver3d > 
 
 run() {   # run <config> <tag> <seed>
     say "start  $1 $2"
-    RESUME=1 SEED="$3" KEEP_CKPTS="10 last" bash scripts/train.sh "$1" "$2" --num_epochs_to_eval 20
+    PCDET_STOP_EPOCH=12 RESUME=1 SEED="$3" KEEP_CKPTS="10 last" bash scripts/train.sh "$1" "$2" \
+        --num_epochs_to_eval 20 --wo_gpu_stat
     say "end    $1 $2 (exit $?)"
     report
 }
@@ -52,9 +57,9 @@ FAIR=(dense_na_lsa dense_hybrid_lsa dense_na_lr5e-4 dense_na_lr2e-3 dense_hybrid
     printf '# config\ttag\tseed\tepochs\tstage\n'
     for s in 666 1234 2024; do
         st=$([[ $s == 666 ]] && echo '2 dense seed 1' || echo '3 dense seeds 2-3')
-        for c in "${BASE_VARIANTS[@]}"; do printf '%s\trunE_s%s\t%s\t20\t%s\n' "$c" "$s" "$s" "$st"; done
+        for c in "${BASE_VARIANTS[@]}"; do printf '%s\trunG_s%s\t%s\t12\t%s\n' "$c" "$s" "$s" "$st"; done
     done
-    for c in "${FAIR[@]}"; do printf '%s\trunE_s666\t666\t20\t4 fair shot\n' "$c"; done
+    for c in "${FAIR[@]}"; do printf '%s\trunG_s666\t666\t12\t4 fair shot\n' "$c"; done
 } > "$PLAN"
 
 say "dense queue starting; free disk: $(df -h . | awk 'NR==2{print $4}')"
@@ -66,14 +71,14 @@ say "passed sanity: ${OK[*]:-none}"
 report
 
 for s in 666 1234 2024; do
-    for c in "${OK[@]}"; do run "$c" "runE_s$s" "$s"; done
+    for c in "${OK[@]}"; do run "$c" "runG_s$s" "$s"; done
 done
 
 for c in "${FAIR[@]}"; do
     base=$(echo "$c" | sed -E 's/_(lsa|lr5e-4|lr2e-3)$//')
-    if [[ " ${OK[*]} " == *" $base "* ]]; then run "$c" runE_s666 666; fi
+    if [[ " ${OK[*]} " == *" $base "* ]]; then run "$c" runG_s666 666; fi
 done
 
 say "Primus test: attention removed at test time"
-bash scripts/attn_off_test.sh "10 20" | tee logs/attn_off_table.txt
+bash scripts/attn_off_test.sh "10 12" | tee logs/attn_off_table.txt
 say "dense queue finished"

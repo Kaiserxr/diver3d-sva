@@ -187,6 +187,8 @@ def main():
     if OUT_ROOT.is_dir():
         for cfg_dir in sorted(p for p in OUT_ROOT.iterdir() if p.is_dir() and not p.name.endswith('_overfit')):
             for run_dir in sorted(p for p in cfg_dir.iterdir() if re.match(r'^run[A-Z]_s\d+$', p.name)):
+                if cfg_dir.name.startswith('dense_') and run_dir.name.startswith('runE_'):
+                    continue    # first dense runs (fp32, 20 epochs): superseded by runG (bf16, stop at 12)
                 if run_dir.joinpath('FINISHED').is_file() or list(run_dir.glob('eval/eval_with_train/epoch_*/*/final_result/data/*.json')):
                     runs.append((cfg_dir.name, run_dir.name))
     jobs, index = [], []

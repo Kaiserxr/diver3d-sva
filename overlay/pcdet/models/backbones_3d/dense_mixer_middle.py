@@ -35,7 +35,10 @@ the ~1,700 occupied voxels). Two families:
    sizes, so sparse vs dense is the only difference to Run A.
 
 Config keys: MIXER, DIM (64), DEPTHS ([2, 2]), MLP_RATIO (4), NHEAD (4), ATTN_LAYERS (2),
-             POOL (4), ROPE_BASE (100.0), LSA (False), ATTN_OFF (False)
+             POOL (4), ROPE_BASE (100.0), LSA (False), ATTN_OFF (False),
+             BF16 (False): run this middle stage in bfloat16 autocast (~2x faster on the dense grid;
+             norms, softmax and the low-resolution global attention stay float32). The rest of the
+             detector is unchanged (float32).
 """
 import itertools
 import math
@@ -120,7 +123,7 @@ class NeighborhoodAttention3d(nn.Module):
                               for dz, dy, dx in self.offsets], 2)   # (B, h, k^3, Z, Y, X)
         logits = logits * scale + self.rpb.view(1, self.h, -1, 1, 1, 1)
         logits = logits.masked_fill(~self.valid((Z, Y, X), x.device), float('-inf'))
-        attn = logits.softmax(2)
+        attn = logits.float().softmax(2).to(vp.dtype)
         out = 0
         for i, (dz, dy, dx) in enumerate(self.offsets):
             out = out + attn[:, :, i:i + 1] * vp[..., dz:dz + Z, dy:dy + Y, dx:dx + X]
@@ -170,6 +173,10 @@ class LowResGlobalAttention(nn.Module):
         return self._cache[key]
 
     def forward(self, x):
+        with torch.autocast(x.device.type, enabled=False):         # few tokens: keep RoPE angles in fp32
+            return self._forward(x.float()).to(x.dtype)
+
+    def _forward(self, x):
         B, C, Z, Y, X = x.shape
         p = self.pool
         assert Y % p == 0 and X % p == 0, (Y, X, p)
@@ -233,6 +240,7 @@ class DenseMixerMiddle(nn.Module):
         self.mixer = c.get('MIXER', 'conv')
         assert self.mixer in ('identity', 'conv', 'na', 'hybrid', 'densea'), self.mixer
         self.attn_off = bool(c.get('ATTN_OFF', False))
+        self.bf16 = bool(c.get('BF16', False))
         if self.mixer == 'densea':
             c1, c2 = c.get('NUM_FILTERS', [64, 64])
             self.net = DenseRunA(input_channels, c1, c2, c.get('NUM_SUBM', 2))
@@ -256,6 +264,15 @@ class DenseMixerMiddle(nn.Module):
 
     def forward(self, batch_dict):
         x = to_dense(batch_dict['voxel_features'], batch_dict['voxel_coords'], batch_dict['batch_size'], self.shape)
+        on = self.bf16 and x.is_cuda
+        with torch.autocast('cuda', dtype=torch.bfloat16, enabled=on):
+            x = self._body(x)
+        B, C, Z, Y, X = x.shape
+        batch_dict['spatial_features'] = x.float().reshape(B, C * Z, Y, X)   # same folding as HeightCompression
+        batch_dict['spatial_features_stride'] = 1
+        return batch_dict
+
+    def _body(self, x):
         if self.mixer == 'densea':
             x = self.net(x)
         else:
@@ -268,7 +285,4 @@ class DenseMixerMiddle(nn.Module):
             if self.global_attn is not None and not self.attn_off:
                 x = self.global_attn(x)
             x = self.down2(x)
-        B, C, Z, Y, X = x.shape
-        batch_dict['spatial_features'] = x.reshape(B, C * Z, Y, X)    # same folding as HeightCompression
-        batch_dict['spatial_features_stride'] = 1
-        return batch_dict
+        return x

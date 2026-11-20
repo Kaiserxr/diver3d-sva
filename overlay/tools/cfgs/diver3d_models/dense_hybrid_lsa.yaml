@@ -34,6 +34,7 @@ MODEL:
     BACKBONE_3D:
         NAME: DenseMixerMiddle         # every voxel is a token, empty ones too
         MIXER: hybrid
+        BF16: True                     # middle stage in bfloat16 (speed); rest of the detector fp32
         LSA: True
     MAP_TO_BEV:
         NAME: DenseBEVPassthrough      # the middle stage already folds 64 ch x 2 heights -> 128
