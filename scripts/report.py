@@ -50,6 +50,7 @@ LABELS = {
     'dsvt_voxel': 'B DSVT', 'ptv3_voxel': 'C PTv3', 'sst_voxel': 'D SST',
     'fshnet_diver3d': 'FSHNet (CVPR 2025)',
     'dense_densea': 'Dense Run A (dense conv 3^3)',
+    'dense_densea_fp32': 'Dense Run A, fp32 (precision check)',
     'dense_identity': 'Dense: identity (floor)',
     'dense_conv': 'Dense: conv mixer',
     'dense_na': 'Dense: neighborhood attention',
