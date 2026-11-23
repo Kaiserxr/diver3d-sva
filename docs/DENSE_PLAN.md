@@ -56,6 +56,12 @@ run for dense Run A / identity, ~11 h for conv, and NA was on course for ~29 h (
 
 The runE runs are ignored by the report.
 
+**Precision check.** For seed 666, dense Run A scored 0.329 in fp32 (runE) but 0.361 in bf16 + compile
+(runG), and identity 0.210 vs 0.242: precision alone moved both by +0.032, as much as the dense-vs-sparse
+gap. Comparisons among the dense variants (all bf16) are unaffected; dense vs sparse (fp32) is not
+settled. `scripts/queue_fp32_check.sh` trains `dense_densea_fp32` (fp32, no compile, like sparse Run A),
+3 seeds, epochs 1-12.
+
 ## How to run (lab PC)
 
 ```bash

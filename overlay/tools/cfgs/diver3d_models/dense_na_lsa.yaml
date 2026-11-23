@@ -36,6 +36,7 @@ MODEL:
         MIXER: na
         BF16: True                     # middle stage in bfloat16 (speed); rest of the detector fp32
         COMPILE: True                  # torch.compile the middle stage (same maths; NA ~8x faster)
+        ATTN_OFF: False                # True only at test time (attn_off_test.sh: the Primus test)
         LSA: True
     MAP_TO_BEV:
         NAME: DenseBEVPassthrough      # the middle stage already folds 64 ch x 2 heights -> 128
